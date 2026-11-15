@@ -203,8 +203,9 @@ fieldset.plu input[type=checkbox]{width:auto;margin:0;accent-color:var(--accent)
     <div id="annStatus" role="status"></div>
     <ol id="annCands" class="cands"></ol>
     <h2>Annonces enregistrées sur cet appareil</h2>
+    <p id="annSummary" class="sub" style="margin:0"></p>
     <ol id="annList" class="cands"></ol>
-    <div class="row"><button type="button" id="annExport">Exporter en CSV</button><button type="button" id="annBackup">Sauvegarder (fichier)</button><label class="filebtn">Restaurer<input type="file" id="annImport" accept=".json,application/json" hidden></label></div>
+    <div class="row"><label class="filebtn">Importer un fichier d'annonces (CSV)<input type="file" id="annCsv" accept=".csv,text/csv" hidden></label><button type="button" id="annExport">Exporter en CSV</button><button type="button" id="annBackup">Sauvegarder (fichier)</button><label class="filebtn">Restaurer<input type="file" id="annImport" accept=".json,application/json" hidden></label></div>
     <p class="note">Les annonces restent dans ce navigateur, sur ce téléphone ou cet ordinateur : rien n'est envoyé sur un serveur. Pour les retrouver sur un autre appareil, « Sauvegarder » puis « Restaurer ». Une annonce ne donne pas le numéro de parcelle : le rapprochement est une estimation, à vérifier sur la photo aérienne.</p>
   </section>
 </aside>
@@ -654,6 +655,8 @@ async function search() {
       S.notes.push("Bâtiments BD TOPO indisponibles (" + bldRes.error.message + ") : comptage d'après OpenStreetMap, sans usage ni date.");
     }
     if (bc.needsInfo && bldSrc !== "BD TOPO IGN") throw new Error("Les filtres « habitables » et « année » ont besoin de la BD TOPO IGN, qui n'a pas pu être chargée. Videz ces champs pour chercher sur le seul nombre de bâtiments." + (bldRes && bldRes.error ? " (" + bldRes.error.message + ")" : ""));
+    const am = autoMatchListings(parcels, F.bld, outline);
+    if (am.tried) S.notes.push(`Annonces importées dans la zone : ${am.linked} rattachée${am.linked > 1 ? "s" : ""} automatiquement, ${am.tried - am.linked} à vérifier (section 4, « Trouver »).`);
     const pluSel = [...document.querySelectorAll("#plu input[type=checkbox]:checked")].map(i => i.value);
     const codes = $("pluCodes").value.split(/[,;\s]+/).map(c => c.trim().toUpperCase()).filter(Boolean);
     const preset = pluSel.length || codes.length ? "on" : "";
@@ -729,7 +732,7 @@ async function search() {
     let top = thr === "top" ? scored.slice(0, 60) : scored.filter(r => r.score >= +thr - 1e-6);
     for (const r of top) {
       const an = ANN.filter(a => a.idu && a.idu === r.ref);
-      if (an.length) { r.ann = an; r.chips.unshift({ s: null, cls: "forsale", label: `en vente ${fmtEur(an[0].price)}`, title: [an[0].title, an[0].added && "annonce ajoutée le " + an[0].added, an[0].match != null && "rapprochement " + an[0].match + " %"].filter(Boolean).join(" · ") }); }
+      if (an.length) { r.ann = an; r.chips.unshift({ s: null, cls: "forsale", label: `en vente ${fmtEur(an[0].price)}${an[0].auto ? " · auto" : ""}`, title: [an[0].auto && "rapprochement automatique, à vérifier", an[0].cond, an[0].year && "construit " + an[0].year, an[0].title, an[0].added && "annonce ajoutée le " + an[0].added, an[0].match != null && "rapprochement " + an[0].match + " %"].filter(Boolean).join(" · ") }); }
       const bl = r.f._b || [], nh = bl.filter(b => b.hab).length, yrs = [...new Set(bl.map(b => b.year).filter(Boolean))].sort();
       r.bld = { n: bl.length, hab: nh, years: yrs, src: bldSrc };
       r.chips.push({ s: null, cls: "plu", label: bl.length ? `${bl.length} bâtiment${bl.length > 1 ? "s" : ""}${bldSrc === "BD TOPO IGN" ? `, ${nh} habitable${nh > 1 ? "s" : ""}` : ""}` : "aucun bâtiment", title: bl.map(b => (b.usage || "usage inconnu") + (b.year ? " · " + b.year : "") + " · " + Math.round(b.area) + " m²").join("\n") });
@@ -1196,7 +1199,7 @@ function scoreForListing(f, G, Q) {
   const parts = [], chips = [];
   if (Q.land) {
     const rel = Math.abs(area - Q.land) / Q.land;
-    parts.push([3, lin(rel, 0.02, 0.4)]);
+    parts.push([3, lin(rel, 0.01, 0.3)]); // listings often give the exact registry area: 5 % off is a real difference
     chips.push(`${Math.round(area).toLocaleString("fr-FR")} m² (${rel < 0.005 ? "=" : (area > Q.land ? "+" : "−") + Math.round(rel * 100) + " %"})`);
   }
   if (Q.house) { parts.push([1, known ? (habs.length ? 1 : 0.3) : 0.7]); chips.push(`${bl.length} bâtiment${bl.length > 1 ? "s" : ""}${known ? `, ${habs.length} habitable${habs.length > 1 ? "s" : ""}` : ""}`); }
@@ -1249,6 +1252,13 @@ function annSee(i) {
 function annPick(i) {
   const Q = S.annCurrent, r = i >= 0 ? S.annCands[i] : null, D = S.annCommune; if (!Q) return;
   const c = r ? r.c : D && D.centre ? D.centre.coordinates : null;
+  const ed = S.annEditId && ANN.find(a => a.id === S.annEditId); S.annEditId = null;
+  if (ed) {
+    if (r) Object.assign(ed, { idu: r.ref, section: r.section || "", numero: r.numero || "", match: Math.round(r.score * 100), auto: false, lon: r.c[0], lat: r.c[1] });
+    else ed.reviewed = true;
+    annSave(); S.annCands = []; S.annCurrent = null; $("annCands").innerHTML = ""; annCandLayer.clearLayers(); annRender();
+    return annStatus(r ? `Annonce rattachée à la parcelle section ${r.section} n° ${r.numero}.` : "Annonce laissée sans parcelle.");
+  }
   ANN.unshift({ id: Date.now().toString(36), added: new Date().toISOString().slice(0, 10), title: Q.title, price: Q.price, land: Q.land, living: Q.living, rooms: Q.rooms,
     commune: Q.communeNom, code: Q.code, url: Q.url, idu: r ? r.ref : "", section: r ? r.section || "" : "", numero: r ? r.numero || "" : "", match: r ? Math.round(r.score * 100) : null,
     lon: c ? c[0] : null, lat: c ? c[1] : null });
@@ -1256,9 +1266,13 @@ function annPick(i) {
   annStatus(r ? `Enregistrée sur la parcelle section ${r.section} n° ${r.numero}. Elle apparaîtra « en vente » dans vos recherches.` : "Enregistrée sans parcelle (placée au centre de la commune).");
 }
 function annRender() {
-  $("annList").innerHTML = ANN.length ? ANN.map(a => `<li><span class="grow"><b>${esc(fmtK(a.price))}</b> · ${esc(a.commune || "?")}${a.land ? ` · terrain ${Math.round(a.land).toLocaleString("fr-FR")} m²` : ""}${a.living ? ` · ${Math.round(a.living)} m² hab.` : ""}<br>
-    <span class="sub" style="margin:0">${a.idu ? `Parcelle ${esc(a.section)} n° ${esc(a.numero)}${a.match != null ? ` (${a.match} %)` : ""}` : "Sans parcelle"} · ajoutée le ${esc(a.added)}${a.title ? " · " + esc(a.title) : ""}</span></span>
-    ${a.lat != null ? `<button type="button" data-go="${esc(a.id)}">Voir</button>` : ""}${safeUrl(a.url) ? `<a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener">Annonce</a>` : ""}<button type="button" data-del="${esc(a.id)}">Supprimer</button></li>`).join("")
+  const linked = ANN.filter(a => a.idu).length, outside = ANN.filter(a => a.outside).length, auto = ANN.filter(a => a.idu && a.auto).length;
+  $("annSummary").textContent = ANN.length ? `${ANN.length} annonce${ANN.length > 1 ? "s" : ""} : ${linked} rattachée${linked > 1 ? "s" : ""} à une parcelle${auto ? ` (dont ${auto} automatiquement, à vérifier)` : ""}, ${ANN.length - linked - outside} sans parcelle${outside ? `, ${outside} hors Deux-Sèvres` : ""}. Les annonces importées se rattachent pendant une recherche qui couvre leur commune.` : "";
+  const shown = [...ANN].sort((x, y) => (y.idu ? 1 : 0) - (x.idu ? 1 : 0)).slice(0, 80);
+  $("annList").innerHTML = ANN.length ? shown.map(a => `<li><span class="grow"><b>${esc(fmtK(a.price))}</b> · ${esc(a.commune || "?")}${a.land ? ` · terrain ${Math.round(a.land).toLocaleString("fr-FR")} m²` : ""}${a.living ? ` · ${Math.round(a.living)} m² hab.` : ""}<br>
+    <span class="sub" style="margin:0">${a.idu ? `Parcelle ${esc(a.section)} n° ${esc(a.numero)}${a.match != null ? ` (${a.match} %${a.auto ? ", auto" : ""})` : ""}` : a.outside ? "Hors Deux-Sèvres" : a.nCands != null ? `Sans parcelle (${a.nCands} possible${a.nCands > 1 ? "s" : ""})` : "Sans parcelle"}${a.cond ? " · " + esc(a.cond) : ""}${a.year ? " · " + esc(a.year) : ""} · ajoutée le ${esc(a.added)}${a.title ? " · " + esc(a.title) : ""}</span></span>
+    ${!a.idu && !a.outside && a.code ? `<button type="button" data-find="${esc(a.id)}">Trouver</button>` : ""}
+    ${a.lat != null ? `<button type="button" data-go="${esc(a.id)}">Voir</button>` : ""}${safeUrl(a.url) ? `<a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener">Annonce</a>` : ""}<button type="button" data-del="${esc(a.id)}">Supprimer</button></li>`).join("") + (ANN.length > shown.length ? `<li><span class="grow sub" style="margin:0">… et ${ANN.length - shown.length} autres (toutes dans l'export CSV).</span></li>` : "")
     : `<li><span class="grow sub" style="margin:0">Aucune annonce enregistrée. Collez une annonce ci-dessus pour commencer.</span></li>`;
   annLayer.clearLayers();
   for (const a of ANN) if (a.lat != null) L.marker([a.lat, a.lon], { icon: L.divIcon({ className: "", html: `<span class="pin sale">${esc(fmtK(a.price))}</span>`, iconSize: null }) })
@@ -1273,6 +1287,13 @@ $("annFind").onclick = annFind;
 $("annCands").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; if (b.dataset.see != null) annSee(+b.dataset.see); if (b.dataset.pick != null) annPick(+b.dataset.pick); });
 $("annList").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.find) {
+    const a = ANN.find(x => x.id === b.dataset.find); if (!a) return;
+    S.annEditId = a.id; S.annParsed = { title: a.title, house: a.house !== false };
+    $("annPrice").value = a.price || ""; $("annLand").value = a.land || ""; $("annLiving").value = a.living || ""; $("annRooms").value = a.rooms || ""; $("annUrl").value = a.url || "";
+    $("annCommune").value = a.code ? `${a.commune} (${a.code})` : a.commune || "";
+    $("annSec").scrollIntoView({ block: "start" }); annFind(); return;
+  }
   if (b.dataset.go) { const a = ANN.find(x => x.id === b.dataset.go); if (a) map.setView([a.lat, a.lon], a.idu ? 18 : 13); }
   if (b.dataset.del) {
     if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Confirmer ?"; setTimeout(() => { if (b.isConnected) { b.dataset.armed = ""; b.textContent = "Supprimer"; } }, 4000); return; }
@@ -1296,6 +1317,78 @@ $("annImport").onchange = async e => {
   e.target.value = "";
 };
 annRender();
+
+
+/* CSV import of listings from another tool (e.g. a Leboncoin export) and automatic matching during a search */
+function annImportCsv(txt) {
+  const rows = parseCSV(String(txt).replace(/^﻿/, "")), h = (rows.shift() || []).map(x => x.trim()), ix = k => h.indexOf(k);
+  const get = (r, ...ks) => { for (const k of ks) { const i = ix(k); if (i >= 0 && r[i] != null && r[i] !== "") return r[i]; } return ""; };
+  const numv = v => { const x = parseFloat(String(v).replace(/[^\d.,-]/g, "").replace(",", ".")); return isFinite(x) ? x : null; };
+  if (ix("price") < 0 && ix("prix_eur") < 0) throw new Error("colonnes non reconnues (il faut au moins un prix : « price » ou « prix_eur »)");
+  const have = new Set(ANN.map(a => a.url || a.extId).filter(Boolean)), today = new Date().toISOString().slice(0, 10);
+  let added = 0, dup = 0, skipped = 0;
+  for (const r of rows) {
+    if (r.length < 3) continue;
+    let at = {}; try { at = JSON.parse(get(r, "attributes") || "{}") || {}; } catch {}
+    const url = safeUrl(get(r, "url", "lien")), extId = get(r, "id"), key = url || extId;
+    if (key && have.has(key)) { dup++; continue; }
+    const type = get(r, "propertyType", "type"), price = numv(get(r, "price", "prix_eur")), land = numv(get(r, "land", "terrain_m2")), living = numv(get(r, "surface", "habitable_m2"));
+    if (!price && !land) { skipped++; continue; }
+    let code = String(at.district_id || get(r, "code_insee") || ""); if (!/^\d[\dAB]\d{3}$/.test(code)) code = "";
+    const city = get(r, "city", "commune");
+    const zip = get(r, "zipcode", "code_postal");
+    let cm = code ? S.communes.find(c => c.code === code) : null; if (!cm && city) cm = S.communes.find(c => c.n === norm(city));
+    if (!cm && zip) { const hits = S.communes.filter(c => (c.codesPostaux || []).includes(zip)); if (hits.length === 1) cm = hits[0]; }
+    ANN.push({ id: "i" + (extId || Math.random().toString(36).slice(2)), extId, src: "import", added: today, title: get(r, "title", "titre").slice(0, 90), price, land, living,
+      rooms: numv(get(r, "rooms", "pieces")), commune: cm ? cm.nom : city, code: cm ? cm.code : "", url, idu: "", section: "", numero: "", match: null,
+      lon: numv(get(r, "lng", "lon")), lat: numv(get(r, "lat")), house: !/terrain|parking|autre/i.test(type), cond: String(at.global_condition || ""), year: String(at.building_year || ""), outside: !cm && !!zip && !/^79/.test(zip) });
+    if (key) have.add(key); added++;
+  }
+  annSave(); annRender();
+  return { added, dup, skipped };
+}
+function autoMatchListings(parcels, G, outline) {
+  const todo = ANN.filter(a => !a.idu && a.src === "import" && !a.outside && !a.reviewed && (a.land || a.living));
+  if (!todo.length) return { tried: 0, linked: 0 };
+  const byCode = new Map();
+  for (const f of parcels) { const c = String(f.properties.idu || "").slice(0, 5); if (!byCode.has(c)) byCode.set(c, []); byCode.get(c).push(f); }
+  const ex = expand(turf.bbox(outline), 3000);
+  let tried = 0, linked = 0;
+  for (const a of todo) {
+    let pool = null;
+    if (a.code && byCode.has(a.code)) pool = byCode.get(a.code);
+    else if (!a.code && a.lat != null && a.lon >= ex[0] && a.lon <= ex[2] && a.lat >= ex[1] && a.lat <= ex[3]) {
+      const near = expand([a.lon, a.lat, a.lon, a.lat], 3000); // portal positions are approximate
+      pool = parcels.filter(f => { const b = turf.bbox(f); return b[0] <= near[2] && b[2] >= near[0] && b[1] <= near[3] && b[3] >= near[1]; });
+    }
+    if (!pool) continue;
+    tried++;
+    const Q = { land: a.land, living: a.living, house: a.house !== false }, cands = [];
+    for (const f of pool) {
+      const ar = +f.properties.contenance || 0;
+      if (Q.land && ar && (ar < Q.land * 0.5 || ar > Q.land * 1.6)) continue;
+      try { const r = scoreForListing(f, G, Q); if (r && r.score >= 0.4) cands.push(r); } catch {}
+    }
+    cands.sort((x, y) => y.score - x.score);
+    const top = cands[0], second = cands[1];
+    a.nCands = cands.length;
+    // link only when confident: high score and a clear lead over the next parcel
+    if (top && top.score >= 0.9 && (!second || top.score - second.score >= 0.08)) {
+      Object.assign(a, { idu: top.ref, section: top.section || "", numero: top.numero || "", match: Math.round(top.score * 100), auto: true });
+      linked++;
+    }
+  }
+  annSave(); annRender();
+  return { tried, linked };
+}
+$("annCsv").onchange = async e => {
+  const file = e.target.files && e.target.files[0]; if (!file) return;
+  try {
+    const r = annImportCsv(await file.text());
+    annStatus(`${r.added} annonce${r.added > 1 ? "s" : ""} importée${r.added > 1 ? "s" : ""}${r.dup ? `, ${r.dup} déjà présente${r.dup > 1 ? "s" : ""}` : ""}${r.skipped ? `, ${r.skipped} ignorée${r.skipped > 1 ? "s" : ""} (sans prix ni terrain)` : ""}. Lancez une recherche sur leur commune ou leur zone : l'application les rattache aux parcelles.`);
+  } catch (err) { annStatus("Import impossible : " + err.message, true); }
+  e.target.value = "";
+};
 
 /* ---------- wiring ---------- */
 $("parse").onclick = parseDescription;
