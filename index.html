@@ -1,0 +1,1123 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dessine-moi un mouton à 6 pattes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+<style>
+/* Layout: a working sidebar (description → criteria → ranked parcels) beside a full-height aerial map. */
+:root{
+  --bg:#eef1ec; --panel:#f8faf6; --ink:#1c2620; --muted:#5b6a60; --line:#cfd8cf;
+  --accent:#c9541f; --accent-ink:#fff; --water:#2a6fb0; --wood:#3b7a37; --hedge:#7a8a2a; --road:#6b5e55;
+  --good:#2f7d3b; --warn:#a86b00; --bad:#b23a2e;
+  --f-display:"Archivo",system-ui,sans-serif; --f-body:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif; --f-mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#141a16; --panel:#1b231e; --ink:#e4ebe5; --muted:#9aaa9f; --line:#2f3b33;
+  --accent:#ef7a45; --accent-ink:#1a0f08; --water:#6aa8e6; --wood:#7cc074; --hedge:#c0cf62; --road:#b9aa9e;
+  --good:#6fcf7e; --warn:#e3a640; --bad:#f07a6c; color-scheme:dark;}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 var(--f-body)}
+.app{display:grid;grid-template-columns:minmax(340px,430px) 1fr;height:100%}
+aside{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:18px 18px 28px;display:flex;flex-direction:column;gap:16px;min-width:0}
+#map{height:100%;min-height:320px}
+h1{font:700 22px/1.1 var(--f-display);margin:0;letter-spacing:-.01em;text-wrap:balance}
+.sub{color:var(--muted);margin:4px 0 0;font-size:13px}
+.brand{display:flex;gap:12px;align-items:center}
+.sheep{width:64px;flex:none}
+.dedi{margin:4px 0 0;font:italic 500 13px var(--f-body);color:var(--accent)}
+h2{font:600 11px/1 var(--f-body);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 8px}
+section{display:flex;flex-direction:column;gap:8px}
+textarea,input,select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px;width:100%;min-width:0}
+textarea{min-height:96px;resize:vertical}
+textarea:focus,input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+button{font:600 13px var(--f-body);border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 12px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px}
+.grid label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted);min-width:0}
+.grid .full{grid-column:1/-1}
+.examples{display:flex;gap:6px;flex-wrap:wrap}
+.examples button{font-weight:500;font-size:12px;padding:4px 8px}
+#status{font:12px/1.4 var(--f-mono);color:var(--muted);min-height:1.4em}
+#status.err{color:var(--bad)}
+.bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden}
+.bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+ol#results{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+#results li{border:1px solid var(--line);border-radius:8px;padding:9px 10px;cursor:pointer;display:grid;grid-template-columns:28px 1fr auto;gap:2px 8px;background:var(--panel)}
+#results li:hover,#results li.sel{border-color:var(--accent)}
+.rank{font:700 15px var(--f-display);color:var(--accent);grid-row:1/4}
+.ref{font:500 13px var(--f-mono)}
+.score{font:600 13px var(--f-mono);text-align:right;font-variant-numeric:tabular-nums}
+.meta{grid-column:2/4;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.chips{grid-column:2/4;display:flex;gap:4px;flex-wrap:wrap}
+.chip{font-size:11px;padding:1px 6px;border-radius:9px;border:1px solid var(--line);white-space:nowrap}
+fieldset.box{grid-column:1/-1;border:1px solid var(--line);border-radius:6px;padding:8px 10px 10px;margin:0;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 10px;min-width:0}
+fieldset.box legend{font-size:12px;color:var(--muted);padding:0 4px}
+.grid fieldset.box label.tick{grid-column:1/-1;flex-direction:row;align-items:center;gap:7px;color:var(--ink);font-size:13px;cursor:pointer}
+fieldset.box input[type=checkbox]{width:auto;margin:0;accent-color:var(--accent);flex:none}
+fieldset.box .hint{grid-column:1/-1;margin:0;font-size:11.5px;color:var(--muted)}
+@media (max-width:520px){fieldset.box{grid-template-columns:1fr 1fr}}
+fieldset.plu{grid-column:1/-1;border:1px solid var(--line);border-radius:6px;padding:8px 10px 10px;margin:0;display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;min-width:0}
+fieldset.plu legend{font-size:12px;color:var(--muted);padding:0 4px}
+.grid fieldset.plu label{flex-direction:row;align-items:center;gap:7px;color:var(--ink);font-size:13px;cursor:pointer}
+fieldset.plu input[type=checkbox]{width:auto;margin:0;accent-color:var(--accent);flex:none}
+.grid fieldset.plu label.codes{grid-column:1/-1;flex-direction:column;align-items:stretch;gap:3px;color:var(--muted);font-size:12px;cursor:default}
+@media (max-width:420px){fieldset.plu{grid-template-columns:1fr}}
+.chip.sale{border-color:var(--water);color:var(--water);font-weight:600}
+.chip.risk{border-color:var(--bad);color:var(--bad);font-weight:600}
+.chip.plu{border-color:var(--accent);color:var(--ink);font-weight:600}
+.chip.ok{border-color:var(--good);color:var(--good)} .chip.part{border-color:var(--warn);color:var(--warn)} .chip.no{border-color:var(--bad);color:var(--bad)}
+.links{grid-column:2/4;display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12px}
+.links a{color:var(--accent)}
+.note{font-size:12px;color:var(--muted);border-left:3px solid var(--line);padding-left:8px;margin:0}
+.legend{font-size:12px;display:flex;gap:10px;flex-wrap:wrap;color:var(--muted)}
+.legend span::before{content:"";display:inline-block;width:14px;height:3px;margin-right:4px;vertical-align:middle;background:var(--c)}
+.pin{font:700 11px var(--f-mono);background:var(--accent);color:var(--accent-ink);border-radius:9px;padding:1px 5px;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+@media (max-width:820px){.app{grid-template-columns:1fr;grid-template-rows:auto 60vh;height:auto}aside{border-right:0;border-bottom:1px solid var(--line)}#map{height:60vh}}
+@media (prefers-reduced-motion:reduce){.bar>i{transition:none}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside>
+  <header>
+    <div class="brand">
+      <svg class="sheep" viewBox="0 0 72 52" aria-hidden="true"><g stroke="var(--ink)" stroke-width="2" stroke-linecap="round">
+        <path d="M14 34v12M20 35v12M28 36v11M36 36v11M44 35v12M50 34v12"/>
+        <path fill="var(--panel)" d="M12 26a8 8 0 0 1 6-11 9 9 0 0 1 15-4 9 9 0 0 1 15 2 8 8 0 0 1 7 12 7 7 0 0 1-6 10H18a7 7 0 0 1-6-9z"/>
+        <ellipse cx="60" cy="20" rx="7" ry="5.5" fill="var(--ink)" stroke="none"/></g>
+        <circle cx="62" cy="19" r="1.2" fill="var(--panel)"/></svg>
+      <div><h1>Dessine-moi un mouton à 6 pattes</h1>
+</div>
+    </div>
+    <p class="sub">Décrivez le terrain recherché. Chaque parcelle cadastrale de la commune est notée selon votre description, puis affichée sur les photos aériennes de l'IGN.</p>
+  </header>
+
+  <section>
+    <h2>1 · Description</h2>
+    <textarea id="desc" aria-label="Description du terrain">Au moins 2 bâtiments habitables avec dépendances à rénover, sur 2 500 m² minimum, accès par la route, à La Crèche.</textarea>
+    <div class="examples" aria-label="Exemples de descriptions">
+      <button type="button" data-ex="Maison habitable avec dépendances à rénover, sur 2 500 m² minimum, accès par la route, à La Crèche.">Maison + dépendances</button>
+      <button type="button" data-ex="Environ 2 hectares de prairie plate près de Niort, en bord de route, entourée de haies, sans construction.">Prairie, Niort</button>
+      <button type="button" data-ex="Parcelle longue et étroite de 8 000 à 12 000 m² à Bressuire, le long d'une rivière, avec une grange.">Bande étroite, Bressuire</button>
+      <button type="button" data-ex="Parcelle boisée de 1 à 3 ha à Mazières-en-Gâtine, en pente, avec un étang, accès par un chemin.">Bois en pente</button>
+    </div>
+    <div class="row"><button type="button" id="parse">Lire la description</button><span class="sub" style="margin:0">remplit les critères ci-dessous, tous modifiables.</span></div>
+  </section>
+
+  <section>
+    <h2>2 · Critères</h2>
+    <div class="grid">
+      <label class="full">Commune (code INSEE)<input id="commune" list="communeList" placeholder="Tapez le nom d'une commune" autocomplete="off"><datalist id="communeList"></datalist></label>
+      <label>Zone de recherche<select id="areaMode"><option value="commune">Toute la commune</option><option value="circle">Cercle autour d'un point</option><option value="zone">Zone dessinée sur la carte</option></select></label>
+      <label>Rayon (km)<input id="radius" type="number" min="0.2" max="10" step="0.1" value="2"></label>
+      <label>Surface min (m²)<input id="amin" type="number" min="0" step="1" inputmode="numeric" placeholder="ex. 2500"></label>
+      <label>Surface max (m²)<input id="amax" type="number" min="0" step="1" inputmode="numeric" placeholder="ex. 30000"></label>
+      <label>Eau<select id="water"><option value="">Ignorer</option><option value="any">Toute eau</option><option value="stream">Ruisseau / fossé</option><option value="river">Rivière</option><option value="pond">Étang / lac</option></select></label>
+      <label>Côté de l'eau<select id="waterSide"></select></label>
+      <label>Bois<select id="wood"><option value="">Ignorer</option><option value="yes">Attenant ou boisé</option></select></label>
+      <label>Côté du bois<select id="woodSide"></select></label>
+      <label>Haies (bocage)<select id="hedge"><option value="">Ignorer</option><option value="yes">Haie en limite</option></select></label>
+      <label>Accès route / chemin<select id="road"><option value="">Ignorer</option><option value="yes">Obligatoire</option></select></label>
+      <fieldset class="box bld" id="bld"><legend>Bâtiments sur la parcelle (plus de 20 m² au sol, laisser vide pour ignorer)</legend>
+        <label>Nombre min<input id="bMin" type="number" min="0" step="1" inputmode="numeric" placeholder="ex. 2"></label>
+        <label>Nombre max<input id="bMax" type="number" min="0" step="1" inputmode="numeric" placeholder="ex. 6"></label>
+        <label>Dont habitables, min<input id="habMin" type="number" min="0" step="1" inputmode="numeric" placeholder="ex. 2"></label>
+        <label>Construit à partir de (année)<input id="yMin" type="number" min="1000" max="2100" step="1" inputmode="numeric" placeholder="ex. 1850"></label>
+        <label>Construit jusqu'en (année)<input id="yMax" type="number" min="1000" max="2100" step="1" inputmode="numeric" placeholder="ex. 1950"></label>
+        <label class="tick"><input type="checkbox" id="yUnknown" checked> Garder les bâtiments sans date connue</label>
+        <p class="hint">Habitable = usage résidentiel ou logement recensé (BD TOPO IGN). L'état du bâtiment n'est pas connu. L'année est celle de la BD TOPO, souvent approximative ; elle s'applique aux bâtiments habitables, ou à tous s'il n'y en a aucun.</p>
+      </fieldset>
+      <label>Forme<select id="shape"><option value="">Ignorer</option><option value="compact">Compacte / carrée</option><option value="long">Longue et étroite</option><option value="irregular">Irrégulière / en L</option></select></label>
+      <label class="full">Pente (vérifiée sur les 25 premières seulement)<select id="slope"><option value="">Ignorer</option><option value="flat">Plat</option><option value="sloping">En pente</option></select></label>
+      <fieldset class="plu" id="plu"><legend>Zonage PLU (Géoportail de l'Urbanisme) : cochez une ou plusieurs zones, aucune pour ignorer</legend>
+        <label><input type="checkbox" id="plu-house" value="house"> Zones U d'habitat (UA, UB, UC, UD…)</label>
+        <label><input type="checkbox" id="plu-U" value="U"> Toute zone urbaine (U)</label>
+        <label><input type="checkbox" id="plu-AUc" value="AUc"> 1AU : à urbaniser, ouverte</label>
+        <label><input type="checkbox" id="plu-AUs" value="AUs"> 2AU : à urbaniser plus tard</label>
+        <label><input type="checkbox" id="plu-A" value="A"> Agricole (A)</label>
+        <label><input type="checkbox" id="plu-N" value="N"> Naturelle et forestière (N)</label>
+        <label class="codes">Autres codes précis (facultatif, séparés par des virgules)<input id="pluCodes" placeholder="ex. UB, UC, Ah, Nh"></label>
+      </fieldset>
+      <fieldset class="box" id="dvfBox"><legend>Ventes passées (DVF, données publiques de l'État)</legend>
+        <label>Ventes<select id="dvfMode"><option value="">Ignorer</option><option value="show" selected>Afficher sur les résultats</option><option value="sold">Seulement les parcelles vendues</option><option value="unsold">Seulement les parcelles non vendues</option></select></label>
+        <label>Vendue à partir de<select id="dvfFrom"></select></label>
+        <label>Vendue jusqu'en<select id="dvfTo"></select></label>
+        <p class="hint">Le prix est celui de la vente entière, qui peut regrouper plusieurs parcelles et bâtiments. DVF couvre environ les 5 dernières années ; les ventes des derniers mois ne sont pas encore publiées.</p>
+      </fieldset>
+      <fieldset class="box" id="riskBox"><legend>Risques et servitudes : exclure les parcelles concernées par…</legend>
+        <label class="tick"><input type="checkbox" id="rxFlood"> Zone inondable (Géorisques, vérifiée sur les 150 premiers résultats, environ 1 par seconde ; sans cette case, les 20 premiers sont vérifiés)</label>
+        <label class="tick"><input type="checkbox" id="rxPPR"> Plan de prévention des risques (PPR : servitudes PM1, PM3)</label>
+        <label class="tick"><input type="checkbox" id="rxEBC"> Espace boisé classé (EBC)</label>
+        <label class="tick"><input type="checkbox" id="rxER"> Emplacement réservé (projet public)</label>
+        <label class="tick"><input type="checkbox" id="rxMH"> Abords de monument historique ou site protégé (AC1, AC2)</label>
+        <p class="hint">Les contraintes trouvées s'affichent sur chaque résultat, même sans cocher. Ce n'est pas un état des risques officiel : vérifiez sur Géorisques et auprès de la mairie (certificat d'urbanisme).</p>
+      </fieldset>
+      <label class="full">Résultats à afficher<select id="minScore"><option value="1">Toutes les parcelles qui remplissent tous les critères (100 %)</option><option value="0.8" selected>Toutes celles à 80 % et plus</option><option value="0.6">Toutes celles à 60 % et plus</option><option value="top">Seulement les 60 meilleures</option></select></label>
+    </div>
+    <div class="row"><button type="button" class="primary" id="search">Rechercher les parcelles</button><button type="button" id="pick">Placer un point</button><button type="button" id="draw">Dessiner la zone</button><button type="button" id="csv" disabled>Exporter en CSV</button></div>
+    <div class="bar" aria-hidden="true"><i id="prog"></i></div>
+    <div id="status" role="status" class="err">Démarrage… Si ce message reste affiché, l'application n'a pas pu démarrer : ouvrez le fichier dans Chrome, Edge ou Firefox (pas dans un aperçu), avec une connexion internet.</div>
+  </section>
+
+  <section>
+    <h2>3 · Parcelles correspondantes</h2>
+    <div class="legend"><span style="--c:var(--water)">eau</span><span style="--c:var(--wood)">bois</span><span style="--c:var(--hedge)">haie</span><span style="--c:var(--road)">route/chemin</span><span style="--c:var(--accent)">parcelle candidate</span></div>
+    <ol id="results"></ol>
+    <p class="note">Une propriété peut couvrir plusieurs parcelles ; l'application classe chaque parcelle séparément. L'eau, les bois, les haies et les routes viennent d'OpenStreetMap et peuvent être incomplets. Vérifiez toujours la photo aérienne et le cadastre avant de contacter qui que ce soit.</p>
+  </section>
+</aside>
+<div id="map" aria-label="Carte"></div>
+</div>
+
+<script>
+"use strict";
+if (!window.L || !window.turf) {
+  const st = document.getElementById("status");
+  st.textContent = "La carte n'a pas pu se charger (bibliothèques bloquées ou pas de connexion). Ouvrez ce fichier dans Chrome, Edge ou Firefox, pas dans un aperçu, avec une connexion internet.";
+  throw new Error("Leaflet/Turf indisponibles");
+}
+document.getElementById("status").classList.remove("err");
+document.getElementById("status").textContent = "Chargement de la liste des communes…";
+/* ---------- services (all free, no key) ---------- */
+const API = {
+  communes: "https://geo.api.gouv.fr/departements/79/communes?fields=nom,code,centre&format=json",
+  commune: c => `https://geo.api.gouv.fr/communes/${c}?fields=nom,code,centre,contour&format=json`,
+  parcels: "https://apicarto.ign.fr/api/cadastre/parcelle",
+  gpu: "https://apicarto.ign.fr/api/gpu/zone-urba",
+  wfs: "https://data.geopf.fr/wfs/ows",
+  dvf: (y, insee) => `https://files.data.gouv.fr/geo-dvf/latest/csv/${y}/communes/${insee.slice(0, 2)}/${insee}.csv`,
+  gpuPsc: "https://apicarto.ign.fr/api/gpu/prescription-surf",
+  gpuSup: "https://apicarto.ign.fr/api/gpu/assiette-sup-s",
+  georisques: "https://georisques.gouv.fr/api/v1/resultats_rapport_risque",
+  overpass: ["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter"],
+  alti: "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json",
+  wmts: (layer, fmt) => `https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}&STYLE=normal&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=${fmt}`
+};
+const SIDES = ["","N","NE","E","SE","S","SW","W","NW"], SIDE_DEG = {N:0,NE:45,E:90,SE:135,S:180,SW:225,W:270,NW:315};
+const $ = id => document.getElementById(id);
+const frSide = s => (s || "").replace(/W/g, "O");
+const S = { communes: [], point: null, picking: false, results: [], communeName: "" };
+
+for (const id of ["waterSide","woodSide"]) $(id).innerHTML = SIDES.map(s => `<option value="${s}">${s ? "Côté " + frSide(s) : "Peu importe"}</option>`).join("");
+
+/* ---------- map ---------- */
+const map = L.map("map", { zoomControl: true }).setView([46.55, -0.3], 9);
+const ortho = L.tileLayer(API.wmts("ORTHOIMAGERY.ORTHOPHOTOS","image/jpeg"), { maxZoom: 20, maxNativeZoom: 19, attribution: "© IGN Géoplateforme" }).addTo(map);
+const plan = L.tileLayer(API.wmts("GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2","image/png"), { maxZoom: 20, maxNativeZoom: 19, attribution: "© IGN Géoplateforme" });
+const cadastre = L.tileLayer(API.wmts("CADASTRALPARCELS.PARCELLAIRE_EXPRESS","image/png"), { maxZoom: 20, maxNativeZoom: 19, minZoom: 13, opacity: .85, attribution: "Cadastre © IGN/DGFiP" }).addTo(map);
+const featLayer = L.layerGroup().addTo(map), candLayer = L.layerGroup().addTo(map), pointLayer = L.layerGroup().addTo(map), zoneLayer = L.layerGroup().addTo(map);
+const pluLayer = L.layerGroup();
+L.control.layers({ "Photos aériennes (IGN)": ortho, "Plan IGN": plan },
+  { "Parcelles cadastrales": cadastre, "Eau, bois, haies, routes": featLayer, "Parcelles candidates": candLayer, "Zonage PLU": pluLayer }).addTo(map);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+/* ---------- helpers ---------- */
+const norm = s => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[-'’]/g, " ").replace(/\s+/g, " ");
+const num = s => parseFloat(String(s).replace(/[\s  ]/g, "").replace(/\.(?=\d{3}\b)/g, "").replace(",", "."));
+const clamp01 = x => Math.max(0, Math.min(1, x));
+const lin = (x, full, zero) => clamp01((zero - x) / (zero - full)); // 1 at `full`, 0 at `zero`
+const ha = m2 => (m2 / 10000).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+function status(msg, err) { $("status").textContent = msg; $("status").classList.toggle("err", !!err); }
+function progress(f) { $("prog").style.width = Math.round(clamp01(f) * 100) + "%"; }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function fetchJSON(url, opts = {}, ms = 90000, tries = 3) {
+  const ac = new AbortController(), t = setTimeout(() => ac.abort(), ms);
+  try {
+    const r = await fetch(url, { ...opts, signal: ac.signal });
+    if ((r.status === 429 || r.status === 503) && tries > 1) { // too many requests: wait, then retry
+      clearTimeout(t);
+      const wait = Math.min(30, +r.headers.get("Retry-After") || 2 ** (4 - tries) * 2) * 1000;
+      status(`${new URL(url).host} demande de ralentir : nouvel essai dans ${Math.round(wait / 1000)} s…`);
+      await sleep(wait); return fetchJSON(url, opts, ms, tries - 1);
+    }
+    if (!r.ok) throw new Error(`${new URL(url).host} a répondu ${r.status}${r.status === 429 ? " (trop de requêtes, réessayez dans une minute)" : ""}`);
+    return await r.json();
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error(`${new URL(url).host} met trop de temps à répondre`);
+    if (e instanceof TypeError) throw new Error(`Impossible de joindre ${new URL(url).host} (hors ligne, bloqué, ou le service refuse l'accès depuis un navigateur)`);
+    throw e;
+  } finally { clearTimeout(t); }
+}
+function store(k, v) { try { localStorage.setItem("mouton6-" + k, v); } catch {} }
+function recall(k) { try { return localStorage.getItem("mouton6-" + k); } catch { return null; } }
+
+/* ---------- communes ---------- */
+async function loadCommunes() {
+  try {
+    S.communes = (await fetchJSON(API.communes)).map(c => ({ ...c, n: norm(c.nom) })).sort((a, b) => a.nom.localeCompare(b.nom, "fr"));
+    $("communeList").innerHTML = S.communes.map(c => `<option value="${esc(c.nom)} (${c.code})"></option>`).join("");
+    status(`${S.communes.length} communes des Deux-Sèvres chargées. Lisez la description ou choisissez une commune.`);
+    if (!$("commune").value) parseDescription();
+  } catch (e) { status("Liste des communes indisponible : " + e.message + ". Vous pouvez saisir un code INSEE, par ex. 79202.", true); }
+}
+function communeFromInput() {
+  const v = $("commune").value.trim(), m = v.match(/\b(79\d{3})\b/);
+  if (m) return { code: m[1], nom: (S.communes.find(c => c.code === m[1]) || {}).nom || m[1] };
+  const c = S.communes.find(c => c.n === norm(v)); return c ? { code: c.code, nom: c.nom } : null;
+}
+
+/* ---------- description parser (French + English, rule-based) ---------- */
+const UNIT = "(ha|hectares?|m2|m²|metres? carres?|meters? squared|sq ?m|square met(?:re|er)s?|ares?|acres?)(?![a-z])";
+function toM2(v, u) {
+  u = u.toLowerCase();
+  if (/^(ha|hect)/.test(u)) return v * 10000;
+  if (/^acre/.test(u)) return v * 4046.86;
+  if (/^are/.test(u)) return v * 100;
+  return v;
+}
+function sideAfter(t, idx) {
+  const w = t.slice(idx, idx + 50).split(/[,.;]/)[0]; // stay inside the same clause
+  const m = w.match(/\b(nord ?est|north ?east|nord ?ouest|north ?west|sud ?est|south ?east|sud ?ouest|south ?west|nord|north|sud|south|est|east|ouest|west)\b/);
+  if (!m) return "";
+  const k = m[1].replace(/\s/g, "");
+  const map = { nord:"N",north:"N",sud:"S",south:"S",est:"E",east:"E",ouest:"W",west:"W",nordest:"NE",northeast:"NE",nordouest:"NW",northwest:"NW",sudest:"SE",southeast:"SE",sudouest:"SW",southwest:"SW" };
+  return map[k] || "";
+}
+function parse(text) {
+  const t = norm(text).replace(/\.(?!\d)/g, " , ").replace(/[(),;:!?"«»]/g, m => m === "," || m === ";" ? " , " : " ").replace(/\s+/g, " "), c = {};
+  // area: range first, then single value with qualifier
+  const NUM = "(\\d{1,3}(?:[ \\u00a0\\u202f.]\\d{3})+|\\d+(?:[.,]\\d+)?)";
+  let m = t.match(new RegExp(NUM + "\\s*(?:" + UNIT + ")?\\s*(?:-|–|a|to|and|et)\\s*" + NUM + "\\s*" + UNIT));
+  if (m) { const u = m[4]; c.areaMin = toM2(num(m[1]), m[2] || u); c.areaMax = toM2(num(m[3]), u); }
+  else if ((m = new RegExp(NUM + "\\s*" + UNIT).exec(t))) {
+    const v = toM2(num(m[1]), m[2]), before = t.slice(Math.max(0, m.index - 28), m.index), after = t.slice(m.index + m[0].length, m.index + m[0].length + 20);
+    if (/(plus de|au moins|minimum|mini|over|at least|more than|>)\s*$/.test(before) || /^\s*(minimum|mini|min|au moins|et plus|ou plus|or more|minimum|at least|\+)/.test(after)) { c.areaMin = v; }
+    else if (/(moins de|maximum|max|under|less than|up to|jusqu a|<)\s*$/.test(before) || /^\s*(maximum|maxi|max|au plus|or less)/.test(after)) { c.areaMin = v * 0.2; c.areaMax = v; }
+    else { c.areaMin = v * 0.8; c.areaMax = v * 1.2; }
+  }
+  // commune: longest name that appears in the text
+  let best = null;
+  for (const cm of S.communes) {
+    if (cm.n.length < 3) continue;
+    const i = (" " + t + " ").indexOf(" " + cm.n + " ");
+    if (i >= 0 && (!best || cm.n.length > best.n.length)) best = cm;
+  }
+  if (best) c.commune = `${best.nom} (${best.code})`;
+  // water
+  let w;
+  if ((w = /\b(riviere|river|fleuve)\b/.exec(t))) c.water = "river";
+  else if ((w = /\b(ruisseau|cours d eau|ru|stream|brook|creek|ditch|fosse)\b/.exec(t))) c.water = "stream";
+  else if ((w = /\b(etang|mare|lac|plan d eau|pond|lake)\b/.exec(t))) c.water = "pond";
+  else if ((w = /\b(eau|water|waterside)\b/.exec(t))) c.water = "any";
+  if (w) c.waterSide = sideAfter(t, w.index);
+  // woods
+  if ((w = /\b(bois|boise|boisee|foret|forest|woods?|wooded|woodland|trees)\b/.exec(t))) { c.wood = "yes"; c.woodSide = sideAfter(t, w.index); }
+  if (/\b(haies?|hedges?|hedgerows?|bocage)\b/.test(t)) c.hedge = "yes";
+  if (/\b(route|chemin|acces|access|road|track|lane|frontage|desservi)\b/.test(t)) c.road = "yes";
+  const NW = { un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, one: 1, two: 2, three: 3, four: 4, five: 5 };
+  const nval = w => NW[w] || parseInt(w, 10);
+  const up = (k, v) => { if (v != null && !(c[k] >= v)) c[k] = v; };
+  if (/\b(sans (construction|batiment|maison)|non bati|terrain nu|no buildings?|vacant|bare land|empty|unbuilt)\b/.test(t)) c.bMax = 0;
+  else {
+    if (/\b(dependances?|outbuildings?|corps de ferme|ensemble (immobilier|agricole)|ferme|annexes)\b/.test(t)) { up("bMin", 2); up("habMin", 1); }
+    if (/\b(maison|habitable|habitation|longere|house|farmhouse|cottage)\b/.test(t)) up("habMin", 1);
+    if (/\b(grange|hangar|batiment|barn|shed|building)\b/.test(t)) up("bMin", 1);
+    let m2;
+    const NUMW = "(\\d+|un|une|deux|trois|quatre|cinq|six|one|two|three|four|five)";
+    if ((m2 = t.match(new RegExp(NUMW + " (maisons|batiments habitables|habitations|logements|houses|dwellings)")))) up("habMin", nval(m2[1]));
+    if ((m2 = t.match(new RegExp(NUMW + " (batiments|constructions|buildings)(?! habitables)")))) up("bMin", nval(m2[1]));
+  }
+  let y;
+  if ((y = t.match(/\bentre (1[0-9]{3}|20[0-9]{2}) et (1[0-9]{3}|20[0-9]{2})\b/))) { c.yMin = +y[1]; c.yMax = +y[2]; }
+  else {
+    if ((y = t.match(/\b(avant|before|anterieure? a|jusqu en) (1[0-9]{3}|20[0-9]{2})\b/))) c.yMax = +y[2] - (/avant|before|anterieure/.test(y[1]) ? 1 : 0);
+    if ((y = t.match(/\b(apres|after|depuis|posterieure? a|a partir de) (1[0-9]{3}|20[0-9]{2})\b/))) c.yMin = +y[2] + (/apres|after|posterieure/.test(y[1]) ? 1 : 0);
+  }
+  if (/\b(long(ue)? et etroite?|etroite?|narrow|elongated|strip|bande)\b/.test(t) || /(?<!\ble )\blongue?\b(?! d)/.test(t)) c.shape = "long"; // not "le long de"
+  else if (/\b(carree?|square|compact|rectangulaire)\b/.test(t)) c.shape = "compact";
+  else if (/\b(en l|l shaped|irregular|irreguliere?)\b/.test(t)) c.shape = "irregular";
+  if (/\b(zone a urbaniser|1au|2au)\b/.test(t)) c.pluPreset = "AU";
+  else if (/\b(constructible|zone urbaine|zone u)\b/.test(t)) c.pluPreset = /\bconstructible\b/.test(t) ? "UAU" : "U";
+  else if (/\bzone agricole\b|\bzone a(?= ,| et | ou |$)/.test(t)) c.pluPreset = "A"; // "zone à proximité" is not zone A
+  else if (/\bzone naturelle\b|\bzone n(?= ,| et | ou |$)/.test(t)) c.pluPreset = "N";
+  if (/\b(plat|plate|flat|level)\b/.test(t)) c.slope = "flat";
+  else if (/\b(pente|en pente|sloping|slope|hillside|coteau)\b/.test(t)) c.slope = "sloping";
+  return c;
+}
+function parseDescription() {
+  const c = parse($("desc").value);
+  const set = (id, v) => { $(id).value = v ?? ""; };
+  if (c.commune) set("commune", c.commune);
+  set("amin", c.areaMin != null ? Math.round(c.areaMin) : "");
+  set("amax", c.areaMax != null ? Math.round(c.areaMax) : "");
+  for (const k of ["water","waterSide","wood","woodSide","hedge","road","shape","slope","bMin","bMax","habMin","yMin","yMax"]) set(k, c[k]);
+  const PRE = { AU: ["AUc", "AUs"], UAU: ["U", "AUc"], U: ["U"], A: ["A"], N: ["N"] }[c.pluPreset] || [];
+  document.querySelectorAll("#plu input[type=checkbox]").forEach(i => { i.checked = PRE.includes(i.value); });
+  const found = Object.keys(c).length;
+  status(found ? `${found} critère${found > 1 ? "s" : ""} lu${found > 1 ? "s" : ""} dans la description. Vérifiez, puis lancez la recherche.` : "Aucun critère reconnu. Remplissez le formulaire à la main.");
+  store("desc", $("desc").value);
+  return c;
+}
+function readCriteria() {
+  S.notes = [];
+  const ha = id => {
+    const v = parseFloat($(id).value); if (!isFinite(v) || v <= 0) return null;
+    if (v < 100) S.notes.push(`Attention : ${id === "amin" ? "surface min" : "surface max"} de ${v} m² seulement. Les surfaces sont en m² (1 ha = 10 000 m²).`);
+    return v;
+  };
+  const g = id => $(id).value || null;
+  return { areaMin: ha("amin"), areaMax: ha("amax"), water: g("water"), waterSide: g("waterSide"), wood: g("wood"), woodSide: g("woodSide"),
+    hedge: g("hedge"), road: g("road"), shape: g("shape"), slope: g("slope") };
+}
+function readBuildingCrit() {
+  const n = id => { const v = parseInt($(id).value, 10); return isFinite(v) && v >= 0 ? v : null; };
+  const b = { min: n("bMin"), max: n("bMax"), habMin: n("habMin"), yMin: n("yMin"), yMax: n("yMax"), keepUnknown: $("yUnknown").checked };
+  b.active = [b.min, b.max, b.habMin, b.yMin, b.yMax].some(v => v != null);
+  b.needsInfo = b.habMin > 0 || b.yMin != null || b.yMax != null;
+  return b;
+}
+
+/* ---------- data fetch ---------- */
+async function fetchParcels(q, onCount) {
+  const out = [], lim = 500;
+  for (let p = 0; p < 80; p++) {
+    const params = new URLSearchParams({ _start: p * lim, _limit: lim });
+    if (q.geom) params.set("geom", JSON.stringify(q.geom)); else params.set("code_insee", q.code);
+    const fc = await fetchJSON(`${API.parcels}?${params}`);
+    const f = (fc && fc.features) || [];
+    out.push(...f); onCount(out.length);
+    if (f.length < lim) return out;
+  }
+  (S.notes || (S.notes = [])).push("Arrêt à 40 000 parcelles : la zone est trop grande, une partie n'a pas été examinée. Réduisez la zone.");
+  return out;
+}
+async function fetchOSM(bb, buildingsOnly) {
+  const b = `(${bb[1]},${bb[0]},${bb[3]},${bb[2]})`;
+  const q = buildingsOnly ? `[out:json][timeout:120];(way["building"]${b};);out geom;` : `[out:json][timeout:120];(
+    way["waterway"~"^(river|stream|brook|canal|ditch|drain)$"]${b};
+    way["natural"="water"]${b};relation["natural"="water"]${b};way["landuse"~"^(reservoir|basin)$"]${b};
+    way["natural"="wood"]${b};way["landuse"="forest"]${b};relation["natural"="wood"]${b};relation["landuse"="forest"]${b};
+    way["barrier"="hedge"]${b};
+    way["highway"]["highway"!~"^(footway|steps|corridor|elevator|proposed|construction|platform|bus_stop)$"]${b};
+  );out geom;`;
+  let err;
+  for (const url of API.overpass) {
+    try { return (await fetchJSON(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "data=" + encodeURIComponent(q) }, 150000)).elements || []; }
+    catch (e) { err = e; }
+  }
+  throw err;
+}
+
+/* ---------- OSM → indexed features ---------- */
+function classify(tags = {}) {
+  if (tags.building) return ["building"];
+  if (tags.waterway) return ["water", tags.waterway === "river" || tags.waterway === "canal" ? "river" : "stream"];
+  if (tags.natural === "water" || tags.landuse === "reservoir" || tags.landuse === "basin") return ["water", "pond"];
+  if (tags.natural === "wood" || tags.landuse === "forest") return ["wood"];
+  if (tags.barrier === "hedge") return ["hedge"];
+  if (tags.highway) return ["road"];
+  return null;
+}
+function stitch(ways) { // join member ways end-to-end into rings or lines
+  const segs = ways.map(w => w.slice()), out = [];
+  while (segs.length) {
+    let cur = segs.shift(), grew = true;
+    while (grew && !(cur.length > 3 && same(cur[0], cur[cur.length - 1]))) {
+      grew = false;
+      for (let i = 0; i < segs.length; i++) {
+        const s = segs[i], e = cur[cur.length - 1];
+        if (same(e, s[0])) cur = cur.concat(s.slice(1));
+        else if (same(e, s[s.length - 1])) cur = cur.concat(s.slice().reverse().slice(1));
+        else if (same(cur[0], s[s.length - 1])) cur = s.concat(cur.slice(1));
+        else if (same(cur[0], s[0])) cur = s.slice().reverse().concat(cur.slice(1));
+        else continue;
+        segs.splice(i, 1); grew = true; break;
+      }
+    }
+    out.push(cur);
+  }
+  return out;
+}
+function same(a, b) { return Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9; }
+class Grid {
+  constructor(cell = 0.004) { this.c = cell; this.m = new Map(); }
+  keys(bb) { const k = [], c = this.c; for (let x = Math.floor(bb[0] / c); x <= Math.floor(bb[2] / c); x++) for (let y = Math.floor(bb[1] / c); y <= Math.floor(bb[3] / c); y++) k.push(x + "," + y); return k; }
+  add(bb, item) { for (const k of this.keys(bb)) { let a = this.m.get(k); if (!a) this.m.set(k, a = []); a.push(item); } }
+  query(bb) { const s = new Set(); for (const k of this.keys(bb)) for (const it of this.m.get(k) || []) s.add(it); return [...s]; }
+}
+function bboxOf(coords) { let a = [Infinity, Infinity, -Infinity, -Infinity]; for (const [x, y] of coords) { if (x < a[0]) a[0] = x; if (y < a[1]) a[1] = y; if (x > a[2]) a[2] = x; if (y > a[3]) a[3] = y; } return a; }
+function buildIndex(elements) {
+  const idx = new Grid(), bld = new Grid(), draw = { water: [], wood: [], hedge: [], road: [] };
+  let nb = 0;
+  for (const el of elements) {
+    const cls = classify(el.tags); if (!cls) continue;
+    let lines = [];
+    if (el.type === "way" && el.geometry) lines = [el.geometry.map(p => [p.lon, p.lat])];
+    else if (el.type === "relation" && el.members) lines = stitch(el.members.filter(m => m.type === "way" && m.geometry && m.role !== "inner").map(m => m.geometry.map(p => [p.lon, p.lat])));
+    for (const coords of lines) {
+      if (coords.length < 2) continue;
+      const closed = coords.length > 3 && same(coords[0], coords[coords.length - 1]);
+      if (cls[0] === "building") {
+        if (!closed) continue;
+        const c = turf.centroid(turf.polygon([coords])).geometry.coordinates; const poly = turf.polygon([coords]); bld.add([c[0], c[1], c[0], c[1]], { c, poly, area: turf.area(poly), hab: null, year: null, usage: "", light: false }); nb++; continue;
+      }
+      const isArea = closed && (cls[0] === "wood" || cls[1] === "pond");
+      const parent = isArea ? turf.polygon([coords]) : null;
+      draw[cls[0]].push({ coords, isArea });
+      for (let i = 0; i < coords.length - 1; i += 30) { // chunk long lines so distance checks stay cheap
+        const part = coords.slice(i, i + 31);
+        if (part.length < 2) continue;
+        idx.add(bboxOf(part), { kind: cls[0], sub: cls[1], line: turf.lineString(part), parent, coords: part });
+      }
+    }
+  }
+  return { idx, bld, draw, nb };
+}
+function drawFeatures(draw) {
+  featLayer.clearLayers();
+  const style = { water: css("--water"), wood: css("--wood"), hedge: css("--hedge"), road: css("--road") };
+  for (const k of Object.keys(draw)) for (const f of draw[k]) {
+    const ll = f.coords.map(([x, y]) => [y, x]);
+    (f.isArea ? L.polygon(ll, { color: style[k], weight: 1, fillOpacity: .12 }) : L.polyline(ll, { color: style[k], weight: k === "road" ? 2 : 2.5, opacity: .85 })).addTo(featLayer);
+  }
+}
+
+/* ---------- scoring ---------- */
+const M_LAT = 111320;
+function expand(bb, m) { const dy = m / M_LAT, dx = m / (M_LAT * Math.cos(bb[1] * Math.PI / 180)); return [bb[0] - dx, bb[1] - dy, bb[2] + dx, bb[3] + dy]; }
+function rings(geom) { return geom.type === "Polygon" ? geom.coordinates : geom.type === "MultiPolygon" ? geom.coordinates.flat() : []; }
+function bearingDiff(a, b) { const d = Math.abs(((a - b) % 360 + 360) % 360); return d > 180 ? 360 - d : d; }
+function nearest(P, idx, kind, sub, range) {
+  // distance (m) from parcel to the nearest feature of this kind; bearings of features within 40 m
+  let best = Infinity, inside = false; const bearings = [];
+  for (const ch of idx.query(expand(P.bb, range))) {
+    if (ch.kind !== kind || (sub && sub !== "any" && ch.sub !== sub)) continue;
+    let d;
+    if (ch.parent && turf.booleanPointInPolygon(P.centroid, ch.parent)) { d = 0; inside = true; }
+    else if (turf.booleanIntersects(P.feat, ch.line)) d = 0;
+    else {
+      d = Infinity;
+      for (const v of P.verts) d = Math.min(d, turf.pointToLineDistance(v, ch.line, { units: "meters" }));
+      for (const v of ch.coords) for (const rl of P.ringLines) d = Math.min(d, turf.pointToLineDistance(v, rl, { units: "meters" }));
+    }
+    if (d < best) best = d;
+    if (d <= 40) bearings.push(turf.bearing(P.centroid, turf.nearestPointOnLine(ch.line, P.centroid)));
+  }
+  return { d: best, inside, bearings };
+}
+function sideOK(bearings, side) { return !side || bearings.some(b => bearingDiff((b + 360) % 360, SIDE_DEG[side]) <= 60); }
+function scoreParcel(f, crit, F) {
+  const geom = f.geometry, rs = rings(geom);
+  if (!rs.length) return null;
+  const area = +f.properties.contenance || turf.area(f);
+  const verts = rs.flat(); const step = Math.max(1, Math.ceil(verts.length / 60));
+  const P = { feat: f, bb: turf.bbox(f), centroid: turf.centroid(f), verts: verts.filter((_, i) => i % step === 0), ringLines: rs.filter(r => r.length > 1).map(r => turf.lineString(r)) };
+  const parts = [], chips = [];
+  const add = (w, s, label) => { parts.push([w, s]); chips.push({ s, label }); };
+  if (crit.areaMin || crit.areaMax) {
+    const lo = crit.areaMin || 0, hi = crit.areaMax || Infinity;
+    const dev = area < lo ? (lo - area) / lo : area > hi ? (area - hi) / hi : 0;
+    add(3, clamp01(1 - dev / 0.4), `${Math.round(area).toLocaleString("fr-FR")} m²`);
+  }
+  if (crit.water) {
+    const r = nearest(P, F.idx, "water", crit.water, 200), ok = sideOK(r.bearings, crit.waterSide);
+    const s = lin(r.d, 15, 150) * (ok ? 1 : 0.4);
+    add(2, s, isFinite(r.d) ? `eau ${Math.round(r.d)} m${crit.waterSide ? (ok ? " · " + frSide(crit.waterSide) : " · mauvais côté") : ""}` : "pas d'eau");
+  }
+  if (crit.wood) {
+    const r = nearest(P, F.idx, "wood", null, 200), ok = sideOK(r.bearings, crit.woodSide) || (r.inside && !crit.woodSide);
+    const s = lin(r.d, 15, 150) * (ok ? 1 : r.inside ? 0.7 : 0.4);
+    add(1.5, s, r.inside ? "boisé" : isFinite(r.d) ? `bois ${Math.round(r.d)} m${crit.woodSide ? (ok ? " · " + frSide(crit.woodSide) : " · mauvais côté") : ""}` : "pas de bois");
+  }
+  if (crit.hedge) { const r = nearest(P, F.idx, "hedge", null, 60); add(1, lin(r.d, 8, 40), isFinite(r.d) ? `haie ${Math.round(r.d)} m` : "pas de haie"); }
+  if (crit.road) { const r = nearest(P, F.idx, "road", null, 120); add(1.5, lin(r.d, 12, 80), isFinite(r.d) ? `route ${Math.round(r.d)} m` : "pas de route"); }
+  if (crit.shape) {
+    const per = rs.reduce((s, r) => s + turf.length(turf.lineString(r), { units: "meters" }), 0);
+    const pp = 4 * Math.PI * turf.area(f) / (per * per);
+    let s;
+    if (crit.shape === "compact") s = lin(-pp, -0.7, -0.4);
+    else if (crit.shape === "long") s = lin(pp, 0.35, 0.6);
+    else { const hull = turf.convex(turf.featureCollection(verts.map(v => turf.point(v)))); const cx = hull ? turf.area(f) / turf.area(hull) : 1; s = lin(cx, 0.75, 0.92); }
+    add(1, s, `forme ${pp.toFixed(2).replace(".", ",")}`);
+  }
+  const W = parts.reduce((a, [w]) => a + w, 0);
+  const score = W ? parts.reduce((a, [w, s]) => a + w * s, 0) / W : 1; // only hard filters set: every remaining parcel matches
+  const ref = f.properties.idu || f.id || "";
+  return { f, area, score, parts, chips, ref, section: f.properties.section, numero: f.properties.numero, c: P.centroid.geometry.coordinates };
+}
+async function addSlope(top, crit) {
+  for (let i = 0; i < top.length; i++) {
+    progress(0.9 + 0.1 * i / top.length);
+    const r = top[i], bb = turf.bbox(r.f), [cx, cy] = r.c;
+    const pts = [[cx, cy], ...[[bb[0], bb[1]], [bb[2], bb[1]], [bb[2], bb[3]], [bb[0], bb[3]]].map(([x, y]) => [cx + (x - cx) * .6, cy + (y - cy) * .6])];
+    try {
+      const p = new URLSearchParams({ lon: pts.map(p => p[0]).join("|"), lat: pts.map(p => p[1]).join("|"), resource: "ign_rge_alti_wld", zonly: "true" });
+      const t0 = Date.now(); const j = await fetchJSON(`${API.alti}?${p}`, {}, 20000);
+      await sleep(Math.max(0, 250 - (Date.now() - t0))); // ≤ 4 requests/s (IGN altimetry is reported at 5/s per IP)
+      const z = (j.elevations || []).map(e => typeof e === "number" ? e : e.z);
+      if (z.length !== pts.length || z.some(v => v == null || v < -1000)) throw new Error("bad");
+      const hi = z.indexOf(Math.max(...z)), lo = z.indexOf(Math.min(...z));
+      const run = turf.distance(pts[hi], pts[lo], { units: "meters" }) || 1, pct = (z[hi] - z[lo]) / run * 100;
+      const s = crit.slope === "flat" ? lin(pct, 3, 8) : lin(-pct, -5, -2);
+      r.parts.push([1, s]); r.chips.push({ s, label: `pente ~${pct.toFixed(1).replace(".", ",")} %` });
+    } catch { r.chips.push({ s: null, label: "pente n/d" }); }
+    const W = r.parts.reduce((a, [w]) => a + w, 0); r.score = r.parts.reduce((a, [w, s]) => a + w * s, 0) / W;
+  }
+  top.sort((a, b) => b.score - a.score);
+}
+
+/* ---------- search pipeline ---------- */
+async function search() {
+  const crit = readCriteria(), btn = $("search");
+  if (S.drawing && !finishDraw()) return; // a zone still being drawn is closed automatically
+  const mode = $("areaMode").value, cm = communeFromInput();
+  if (mode === "commune" && !cm) return status("Choisissez une commune dans la liste (ou saisissez son code INSEE, par ex. 79202).", true);
+  if (mode === "zone" && !S.zone) return status("Dessinez d'abord la zone : bouton Dessiner la zone, puis cliquez sur la carte.", true);
+  if (mode === "circle" && (!S.point || S.pointAuto)) {
+    const cc = cm && S.communes.find(c => c.code === cm.code);
+    if (cc && cc.centre) { S.point = L.latLng(cc.centre.coordinates[1], cc.centre.coordinates[0]); S.pointAuto = true; pointLayer.clearLayers(); L.circleMarker(S.point, { radius: 6, color: css("--accent"), fillOpacity: 1 }).addTo(pointLayer); S.notes.push(`Aucun point placé : cercle centré sur ${cc.nom}.`); }
+    else return status("Cliquez d'abord sur Placer un point, puis sur la carte (ou choisissez une commune dans la liste).", true);
+  }
+  if (mode === "circle" && +$("radius").value > 5) S.notes.push(`Cercle de ${$("radius").value} km : zone très grande, la recherche peut être longue.`);
+  btn.disabled = true; $("csv").disabled = true; progress(0.02); candLayer.clearLayers(); featLayer.clearLayers(); pluLayer.clearLayers(); $("results").innerHTML = "";
+  try {
+    let q, outline;
+    if (mode === "zone") {
+      outline = S.zone; q = { geom: S.zone.geometry }; S.communeName = "zone dessinée";
+    } else if (mode === "circle") {
+      outline = turf.circle([S.point.lng, S.point.lat], Math.min(10, Math.max(0.2, +$("radius").value || 2)), { steps: 32, units: "kilometers" });
+      q = { geom: outline.geometry }; S.communeName = "autour du point";
+    } else {
+      status(`Chargement du contour de ${cm.nom}…`);
+      const c = await fetchJSON(API.commune(cm.code));
+      outline = turf.feature(c.contour); q = { code: cm.code }; S.communeName = c.nom;
+    }
+    const bb = turf.bbox(outline);
+    map.fitBounds([[bb[1], bb[0]], [bb[3], bb[2]]]);
+    L.geoJSON(outline, { style: { color: css("--accent"), weight: 2, dashArray: "6 5", fill: false } }).addTo(candLayer);
+
+    status("Chargement des parcelles cadastrales…"); progress(0.05);
+    const [parcels, elements, zonesRes, bldRes, pscRes, supRes] = await Promise.all([
+      fetchParcels(q, n => { status(`Chargement des parcelles cadastrales… ${n.toLocaleString("fr-FR")}`); progress(0.05 + Math.min(0.35, n / 40000)); }),
+      fetchOSM(bb).catch(e => ({ error: e })),
+      fetchZones(bb).catch(e => ({ error: e })),
+      fetchBuildingsIGN(bb).catch(e => ({ error: e })),
+      fetchGpuLayer(API.gpuPsc, bb).catch(e => ({ error: e })),
+      fetchGpuLayer(API.gpuSup, bb).catch(e => ({ error: e }))
+    ]);
+    status(`${parcels.length.toLocaleString("fr-FR")} parcelles. Indexation des données OpenStreetMap…`); progress(0.45);
+    if (!Array.isArray(elements)) {
+      if (crit.water || crit.wood || crit.hedge || crit.road) throw new Error("Les critères eau, bois, haies et accès ont besoin d'OpenStreetMap, qui n'a pas répondu (" + elements.error.message + "). Mettez-les sur « Ignorer » ou réessayez dans quelques minutes.");
+      S.notes.push("OpenStreetMap indisponible (" + elements.error.message + ") : eau, bois, haies et routes non affichés.");
+    }
+    const F = buildIndex(Array.isArray(elements) ? elements : []); drawFeatures(F.draw);
+    const bc = readBuildingCrit();
+    let bldSrc = "OpenStreetMap";
+    if (Array.isArray(bldRes)) { F.bld = indexBuildingsIGN(bldRes); F.nb = bldRes.length; bldSrc = "BD TOPO IGN"; }
+    else if (!bc.needsInfo) {
+      try { status("BD TOPO indisponible : chargement des bâtiments OpenStreetMap…"); const ob = buildIndex(await fetchOSM(bb, true)); F.bld = ob.bld; F.nb = ob.nb; }
+      catch (e) { F.nb = 0; S.notes.push("Bâtiments OpenStreetMap indisponibles aussi (" + e.message + ")."); if (bc.active) throw new Error("Aucune source de bâtiments n'a répondu (BD TOPO : " + bldRes.error.message + " ; OpenStreetMap : " + e.message + "). Videz les champs Bâtiments ou réessayez plus tard."); }
+      S.notes.push("Bâtiments BD TOPO indisponibles (" + bldRes.error.message + ") : comptage d'après OpenStreetMap, sans usage ni date.");
+    }
+    if (bc.needsInfo && bldSrc !== "BD TOPO IGN") throw new Error("Les filtres « habitables » et « année » ont besoin de la BD TOPO IGN, qui n'a pas pu être chargée. Videz ces champs pour chercher sur le seul nombre de bâtiments." + (bldRes && bldRes.error ? " (" + bldRes.error.message + ")" : ""));
+    const pluSel = [...document.querySelectorAll("#plu input[type=checkbox]:checked")].map(i => i.value);
+    const codes = $("pluCodes").value.split(/[,;\s]+/).map(c => c.trim().toUpperCase()).filter(Boolean);
+    const preset = pluSel.length || codes.length ? "on" : "";
+    let ZG = null;
+    if (Array.isArray(zonesRes)) {
+      ZG = indexZones(zonesRes); drawZones(zonesRes, !!preset);
+      if (!zonesRes.length) S.notes.push("Aucun zonage PLU publié ici (commune au RNU, ou document pas encore numérisé).");
+    } else S.notes.push("Zonage PLU indisponible : " + zonesRes.error.message + ".");
+    if (preset && (!ZG || !zonesRes.length)) throw new Error("Le filtre Zonage PLU est actif, mais aucun zonage n'a pu être chargé pour cette zone. Décochez toutes les zones pour chercher sans lui." + (S.notes.length ? " " + S.notes[S.notes.length - 1] : ""));
+
+    let pool = parcels;
+    if (q.geom) pool = pool.filter(f => { try { return turf.booleanPointInPolygon(turf.centroid(f), outline); } catch { return false; } });
+    if (crit.areaMin || crit.areaMax) {
+      const lo = (crit.areaMin || 0) * 0.6, hi = (crit.areaMax || Infinity) * 1.4;
+      pool = pool.filter(f => { const a = +f.properties.contenance || turf.area(f); return a >= lo && a <= hi; });
+    }
+    if (preset) {
+      const before = pool.length;
+      pool = pool.filter(f => { try { f._z = zoneAt(ZG, turf.centroid(f).geometry.coordinates); return pluMatch(f._z, pluSel, codes); } catch { return false; } });
+      S.notes.push(`Zonage PLU : ${pool.length.toLocaleString("fr-FR")} parcelle${pool.length > 1 ? "s" : ""} sur ${before.toLocaleString("fr-FR")} dans les zones choisies.`);
+    }
+    for (const f of pool) { try { f._b = parcelBuildings(f, F.bld); } catch { f._b = []; } }
+    if (bc.active) {
+      const before = pool.length;
+      pool = pool.filter(f => buildingsMatch(f._b, bc));
+      S.notes.push(`Bâtiments : ${pool.length.toLocaleString("fr-FR")} parcelle${pool.length > 1 ? "s" : ""} sur ${before.toLocaleString("fr-FR")} remplissent les critères.`);
+    }
+    // planning constraints (PLU prescriptions + public-law easements)
+    const CX = indexConstraints(pscRes, supRes);
+    if (!Array.isArray(pscRes)) S.notes.push("Prescriptions PLU indisponibles (" + pscRes.error.message + ").");
+    if (!Array.isArray(supRes)) S.notes.push("Servitudes (SUP) indisponibles (" + supRes.error.message + ").");
+    const rx = { PPR: $("rxPPR").checked, EBC: $("rxEBC").checked, ER: $("rxER").checked, MH: $("rxMH").checked, flood: $("rxFlood").checked };
+    const rxAny = rx.PPR || rx.EBC || rx.ER || rx.MH;
+    if ((rx.EBC || rx.ER) && !Array.isArray(pscRes)) throw new Error("Les exclusions EBC / emplacement réservé ont besoin des prescriptions du PLU, qui n'ont pas pu être chargées. Décochez-les pour chercher sans elles.");
+    if ((rx.PPR || rx.MH) && !Array.isArray(supRes)) throw new Error("Les exclusions PPR / monument historique ont besoin des servitudes (SUP), qui n'ont pas pu être chargées. Décochez-les pour chercher sans elles.");
+    if (rxAny) {
+      const before = pool.length;
+      pool = pool.filter(f => { f._cx = constraintsOf(f, CX); return !f._cx.some(c => rx[c.kind]); });
+      S.notes.push(`Risques et servitudes : ${(before - pool.length).toLocaleString("fr-FR")} parcelle${before - pool.length > 1 ? "s" : ""} exclue${before - pool.length > 1 ? "s" : ""}.`);
+    }
+    // past sales (DVF)
+    const dvfMode = $("dvfMode").value, yFrom = +$("dvfFrom").value, yTo = +$("dvfTo").value;
+    let DV = null;
+    if (dvfMode && pool.length) {
+      const insees = [...new Set(pool.map(f => String(f.properties.idu || f.properties.code_insee || "").slice(0, 5)).filter(c => /^\d[\dAB]\d{3}$/.test(c)))];
+      try { DV = await fetchDVF(insees, Math.min(yFrom, yTo), Math.max(yFrom, yTo)); }
+      catch (e) { if (dvfMode !== "show") throw new Error("Le filtre Ventes a besoin des données DVF, qui n'ont pas pu être chargées (" + e.message + "). Choisissez « Afficher » ou « Ignorer »."); S.notes.push("Ventes DVF indisponibles (" + e.message + ")."); }
+      if (DV) {
+        for (const f of pool) f._dvf = salesOf(f, DV, Math.min(yFrom, yTo), Math.max(yFrom, yTo));
+        S.notes.push(`Ventes DVF : source ${DV.source}${DV.failed.length ? " (après échec de " + DV.failed.map(f => f.split(" : ")[0]).join(", ") + ")" : ""}.`);
+        if (DV.missing.length) S.notes.push(`DVF : pas de fichier pour ${DV.missing.join(", ")}.`);
+        if (dvfMode === "sold" || dvfMode === "unsold") {
+          const before = pool.length;
+          pool = pool.filter(f => dvfMode === "sold" ? f._dvf.length : !f._dvf.length);
+          S.notes.push(`Ventes ${Math.min(yFrom, yTo)}–${Math.max(yFrom, yTo)} : ${pool.length.toLocaleString("fr-FR")} parcelle${pool.length > 1 ? "s" : ""} ${dvfMode === "sold" ? "vendue" : "non vendue"}${pool.length > 1 ? "s" : ""} sur ${before.toLocaleString("fr-FR")}.`);
+        }
+      }
+    }
+    const scored = [];
+    for (let i = 0; i < pool.length; i++) {
+      try { const r = scoreParcel(pool[i], crit, F); if (r) scored.push(r); } catch {}
+      if (i % 150 === 0) { status(`Notation : ${i.toLocaleString("fr-FR")} sur ${pool.length.toLocaleString("fr-FR")} parcelles…`); progress(0.5 + 0.4 * i / pool.length); await new Promise(r => setTimeout(r)); }
+    }
+    scored.sort((a, b) => b.score - a.score);
+    if (crit.slope && scored.length) { status("Vérification de la pente des 25 premières (altimétrie IGN)…"); await addSlope(scored.slice(0, 25), crit); scored.sort((a, b) => b.score - a.score); }
+    const thr = $("minScore").value;
+    let top = thr === "top" ? scored.slice(0, 60) : scored.filter(r => r.score >= +thr - 1e-6);
+    for (const r of top) {
+      const bl = r.f._b || [], nh = bl.filter(b => b.hab).length, yrs = [...new Set(bl.map(b => b.year).filter(Boolean))].sort();
+      r.bld = { n: bl.length, hab: nh, years: yrs, src: bldSrc };
+      r.chips.push({ s: null, cls: "plu", label: bl.length ? `${bl.length} bâtiment${bl.length > 1 ? "s" : ""}${bldSrc === "BD TOPO IGN" ? `, ${nh} habitable${nh > 1 ? "s" : ""}` : ""}` : "aucun bâtiment", title: bl.map(b => (b.usage || "usage inconnu") + (b.year ? " · " + b.year : "") + " · " + Math.round(b.area) + " m²").join("\n") });
+      if (yrs.length) r.chips.push({ s: null, label: "année " + (yrs.length > 3 ? `${yrs[0]}–${yrs[yrs.length - 1]}` : yrs.join(", ")) });
+      const z = r.f._z !== undefined ? r.f._z : zoneAt(ZG, r.c); r.plu = z;
+      r.chips.push({ s: null, cls: "plu", label: z ? "PLU " + (z.p.libelle || z.fam) : ZG && zonesRes.length ? "PLU inconnu" : "PLU n/d", title: z ? [z.p.libelong, z.p.typezone && "type " + z.p.typezone].filter(Boolean).join(" · ") : "" });
+      r.cx = r.f._cx || constraintsOf(r.f, CX);
+      for (const c of r.cx) r.chips.push({ s: null, cls: "risk", label: c.label, title: c.detail });
+      r.sales = r.f._dvf || null;
+      if (r.sales) {
+        if (r.sales.length) for (const m of r.sales.slice(0, 2)) r.chips.push({ s: null, cls: "sale", label: `vendu ${fmtDate(m.date)} · ${fmtEur(m.price)}${m.parcels.size > 1 ? ` (${m.parcels.size} parcelles)` : ""}`, title: [m.nature, [...m.types].join(", "), m.bati ? Math.round(m.bati) + " m² bâtis" : ""].filter(Boolean).join(" · ") });
+        else r.chips.push({ s: null, label: `pas de vente ${Math.min(yFrom, yTo)}–${Math.max(yFrom, yTo)}` });
+      }
+    }
+    // flood risk (Géorisques), point check on the results
+    const nFlood = Math.min(top.length, rx.flood ? 150 : 20);
+    if (nFlood) {
+      let done = 0, failed = 0;
+      const queue = top.slice(0, nFlood);
+      // one request at a time, about 1 per second: this endpoint is reported to allow 1 call/s
+      for (const r of queue) {
+        const t0 = Date.now();
+        try { r.risk = await georisquesAt(r.c); } catch { r.risk = null; failed++; }
+        done++; status(`Vérification des risques (Géorisques, 1 par seconde)… ${done} / ${nFlood}`); progress(0.92 + 0.08 * done / nFlood);
+        if (done < nFlood) await sleep(Math.max(0, 1100 - (Date.now() - t0)));
+      }
+      for (const r of top.slice(0, nFlood)) {
+        if (!r.risk) { r.chips.push({ s: null, label: "inondation : non vérifiée" }); continue; }
+        if (r.risk.flood) r.chips.push({ s: null, cls: "risk", label: "zone inondable", title: r.risk.list.join(" · ") });
+        else if (r.risk.flood === false) r.chips.push({ s: null, label: "pas de risque inondation", title: r.risk.list.length ? "Autres risques : " + r.risk.list.join(" · ") : "" });
+        else r.chips.push({ s: null, label: "inondation : ?", title: "Réponse Géorisques non reconnue" });
+        const other = r.risk.list.filter(x => !/inond/i.test(x));
+        if (other.length) r.chips.push({ s: null, cls: "risk", label: other.length === 1 ? other[0] : `${other.length} autres risques`, title: other.join(" · ") });
+      }
+      if (failed) S.notes.push(`Géorisques : ${failed} vérification${failed > 1 ? "s" : ""} en échec.`);
+      if (rx.flood) {
+        const before = top.length;
+        top = top.filter((r, i) => !(i < nFlood && r.risk && r.risk.flood));
+        S.notes.push(`Zone inondable : ${before - top.length} exclue${before - top.length > 1 ? "s" : ""}${before > 150 ? " (seuls les 150 premiers résultats sont vérifiés)" : ""}.`);
+      }
+    }
+    S.results = top; render(top); const notes = S.notes.length ? " " + S.notes.join(" ") : "";
+    progress(1);
+    status(top.length ? `${top.length.toLocaleString("fr-FR")} parcelle${top.length > 1 ? "s" : ""} ${thr === "top" ? "parmi les meilleures" : `à ${Math.round(+thr * 100)} % ou plus`} sur ${scored.length.toLocaleString("fr-FR")} notées (${S.communeName}).${top.length > 300 ? " La liste affiche les 300 premières ; la carte et l'export CSV les contiennent toutes." : ""} Bâtiments (${bldSrc}) : ${F.nb.toLocaleString("fr-FR")}. OSM : ${F.draw.water.length} éléments d'eau, ${F.draw.wood.length} bois, ${F.draw.hedge.length} haies.` + notes : (scored.length ? `Aucune parcelle n'atteint le seuil choisi sur ${scored.length.toLocaleString("fr-FR")} notées. Baissez le seuil dans « Résultats à afficher ».` : "Aucune parcelle ne passe les filtres (surface, zonage PLU, bâtiments). Assouplissez-en un ; le détail par filtre suit.") + notes);
+    $("csv").disabled = !top.length;
+  } catch (e) { status(e.message, true); progress(0); }
+  finally { btn.disabled = false; }
+}
+
+/* ---------- buildings (BD TOPO IGN via Géoplateforme WFS; OSM fallback) ---------- */
+async function fetchBuildingsIGN(bb) {
+  const out = [], n = 5000;
+  for (let p = 0; p < 20; p++) {
+    const q = new URLSearchParams({ SERVICE: "WFS", VERSION: "2.0.0", REQUEST: "GetFeature", TYPENAMES: "BDTOPO_V3:batiment",
+      OUTPUTFORMAT: "application/json", SRSNAME: "CRS:84", BBOX: `${bb[0]},${bb[1]},${bb[2]},${bb[3]},CRS:84`, COUNT: n, STARTINDEX: p * n });
+    const fc = await fetchJSON(`${API.wfs}?${q}`, {}, 120000);
+    const f = (fc && fc.features) || []; out.push(...f);
+    status(`Chargement des bâtiments IGN… ${out.length.toLocaleString("fr-FR")}`);
+    if (f.length < n) break;
+  }
+  const geo = out.filter(f => f.geometry && /Polygon/.test(f.geometry.type));
+  // guard against latitude/longitude order: Deux-Sèvres longitudes are near 0, latitudes near 46
+  const first = geo[0] && turf.coordAll(geo[0])[0];
+  if (first && Math.abs(first[0]) > 40) geo.forEach(f => turf.coordEach(f, c => { const x = c[0]; c[0] = c[1]; c[1] = x; }));
+  return geo;
+}
+function indexBuildingsIGN(feats) {
+  const g = new Grid();
+  for (const f of feats) {
+    const p = f.properties || {}, c = turf.centroid(f).geometry.coordinates;
+    const usage = [p.usage_1, p.usage_2].filter(u => u && !/^null$/i.test(u)).join(" / ") || p.nature || "";
+    const hab = /r[eé]sidentiel/i.test(usage) || +p.nombre_de_logements > 0;
+    const yr = parseInt(String(p.date_d_apparition || p.annee_de_construction || "").slice(0, 4), 10);
+    g.add([c[0], c[1], c[0], c[1]], { c, poly: f, area: turf.area(f), hab, year: yr > 1000 && yr <= 2100 ? yr : null, usage, light: p.construction_legere === true || p.construction_legere === "true" });
+  }
+  return g;
+}
+function parcelBuildings(f, G) {
+  const out = [];
+  for (const b of G.query(turf.bbox(f))) if (b.area >= 20 && !b.light && turf.booleanPointInPolygon(b.c, f)) out.push(b);
+  return out;
+}
+function buildingsMatch(list, bc) {
+  const n = list.length, habs = list.filter(b => b.hab);
+  if (bc.min != null && n < bc.min) return false;
+  if (bc.max != null && n > bc.max) return false;
+  if (bc.habMin != null && habs.length < bc.habMin) return false;
+  if (bc.yMin != null || bc.yMax != null) {
+    const pool = habs.length ? habs : list;
+    if (!pool.length) return false;
+    return pool.some(b => b.year == null ? bc.keepUnknown : (bc.yMin == null || b.year >= bc.yMin) && (bc.yMax == null || b.year <= bc.yMax));
+  }
+  return true;
+}
+
+/* ---------- past sales (DVF géolocalisées, Etalab) ---------- */
+(function initYears() {
+  const now = new Date().getFullYear(), opts = [];
+  for (let y = now; y >= 2014; y--) opts.push(`<option value="${y}">${y}</option>`);
+  $("dvfFrom").innerHTML = opts.join(""); $("dvfTo").innerHTML = opts.join("");
+  $("dvfFrom").value = String(now - 6); $("dvfTo").value = String(now);
+})();
+const fmtEur = v => v ? Math.round(v).toLocaleString("fr-FR") + " €" : "prix n/d";
+const fmtDate = d => { const m = String(d || "").match(/^(\d{4})-(\d{2})/); return m ? `${m[2]}/${m[1]}` : String(d || "?"); };
+function communeNameOf(r) { const code = String(r.ref || "").slice(0, 5), c = S.communes.find(c => c.code === code); return c ? c.nom : (S.communeName || ""); }
+async function fetchText(url, ms = 60000) {
+  const ac = new AbortController(), t = setTimeout(() => ac.abort(), ms);
+  try {
+    const r = await fetch(url, { signal: ac.signal });
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error(`${new URL(url).host} a répondu ${r.status}`);
+    return await r.text();
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error(`${new URL(url).host} met trop de temps à répondre`);
+    if (e instanceof TypeError) throw new Error(`Impossible de joindre ${new URL(url).host}`);
+    throw e;
+  } finally { clearTimeout(t); }
+}
+function parseCSV(txt) {
+  const rows = []; let row = [], f = "", q = false;
+  for (let i = 0; i < txt.length; i++) {
+    const ch = txt[i];
+    if (q) { if (ch === '"') { if (txt[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ",") { row.push(f); f = ""; }
+    else if (ch === "\n") { row.push(f); rows.push(row); row = []; f = ""; }
+    else if (ch !== "\r") f += ch;
+  }
+  if (f || row.length) { row.push(f); rows.push(row); }
+  return rows;
+}
+/* Three DVF sources, tried in order; the first that answers is used for the whole search.
+   1. Cerema "API données foncières", DVF+ open data (open access, beta)
+   2. Micro-API DVF (community proof of concept, no availability guarantee)
+   3. files.data.gouv.fr geo-DVF CSV per commune and year (refused from a local file on some setups) */
+const DVF_SOURCES = [
+  { name: "Cerema DVF+", run: dvfCerema },
+  { name: "Micro-API DVF", run: dvfMicro },
+  { name: "data.gouv.fr (geo-DVF)", run: dvfFiles }
+];
+async function fetchDVF(insees, yFrom, yTo) {
+  const errors = [];
+  for (const src of DVF_SOURCES) {
+    const acc = dvfAcc();
+    try {
+      await src.run(insees, yFrom, yTo, acc);
+      return { byParcel: acc.byParcel, source: src.name, missing: acc.missing(insees.length), failed: errors };
+    } catch (e) { errors.push(`${src.name} : ${e.message}`); }
+  }
+  throw new Error("aucune source n'a répondu (" + errors.join(" ; ") + ")");
+}
+function dvfAcc() {
+  const byParcel = new Map(), muts = new Map(), miss = new Map();
+  return {
+    byParcel,
+    add(id, date, nature, price, parcels, types, bati) {
+      let m = muts.get(id);
+      if (!m) muts.set(id, m = { date: String(date || "").slice(0, 10), nature: nature || "", price: +price || null, parcels: new Set(), types: new Set(), bati: 0 });
+      for (const p of parcels) if (p) { m.parcels.add(p); let a = byParcel.get(p); if (!a) byParcel.set(p, a = new Set()); a.add(m); }
+      for (const t of types) if (t) m.types.add(t);
+      m.bati += +bati || 0;
+    },
+    miss(y) { miss.set(y, (miss.get(y) || 0) + 1); },
+    missing(n) { return [...miss].filter(([, k]) => k === n).map(([y]) => y).sort(); }
+  };
+}
+async function dvfCerema(insees, yFrom, yTo, acc) {
+  for (const code of insees) {
+    let url = `https://apidf-preprod.cerema.fr/dvf_opendata/mutations/?${new URLSearchParams({ code_insee: code, anneemut_min: yFrom, anneemut_max: yTo, page_size: 500 })}`;
+    for (let p = 0; url && p < 40; p++) {
+      status(`Ventes DVF (Cerema) : commune ${code}, page ${p + 1}…`);
+      const j = await fetchJSON(url, {}, 60000);
+      if (!j || !Array.isArray(j.results)) throw new Error("réponse non reconnue");
+      for (const r of j.results) {
+        const y = +r.anneemut || parseInt(String(r.datemut || "").slice(0, 4), 10);
+        if (y < yFrom || y > yTo) continue;
+        acc.add("c" + (r.idmutation || r.idmutinvar || r.id), r.datemut, r.libnatmut, r.valeurfonc, Array.isArray(r.l_idpar) ? r.l_idpar : String(r.l_idpar || "").replace(/[{}"]/g, "").split(","), [r.libtypbien], r.sbati);
+      }
+      url = j.next ? String(j.next).replace(/^http:/, "https:") : null;
+    }
+  }
+}
+async function dvfMicro(insees, yFrom, yTo, acc) {
+  for (const code of insees) {
+    status(`Ventes DVF (Micro-API) : commune ${code}…`);
+    const j = await fetchJSON(`https://api.cquest.org/dvf?${new URLSearchParams({ code_commune: code })}`, {}, 60000);
+    const rows = j && (j.resultats || j.results || j.features);
+    if (!Array.isArray(rows)) throw new Error("réponse non reconnue");
+    for (const r0 of rows) {
+      const r = r0.properties || r0, y = parseInt(String(r.date_mutation || "").slice(0, 4), 10);
+      if (!(y >= yFrom && y <= yTo)) continue;
+      const pid = r.id_parcelle || (r.code_commune && r.section && r.numero_plan ? String(r.numero_plan) : "");
+      acc.add("m" + (r.id_mutation || `${r.date_mutation}-${r.valeur_fonciere}-${r.numero_disposition || ""}`), r.date_mutation, r.nature_mutation, r.valeur_fonciere, [pid], [r.type_local], r.surface_relle_bati || r.surface_reelle_bati);
+    }
+  }
+}
+async function dvfFiles(insees, yFrom, yTo, acc) {
+  let files = 0;
+  for (const code of insees) for (let y = yFrom; y <= yTo; y++) {
+    status(`Ventes DVF (data.gouv.fr) : commune ${code}, année ${y}…`);
+    const txt = await fetchText(API.dvf(y, code));
+    if (txt == null) { acc.miss(y); continue; }
+    files++;
+    const rows = parseCSV(txt), h = rows.shift() || [], ix = k => h.indexOf(k);
+    const I = { id: ix("id_mutation"), d: ix("date_mutation"), nat: ix("nature_mutation"), v: ix("valeur_fonciere"), p: ix("id_parcelle"), t: ix("type_local"), sb: ix("surface_reelle_bati") };
+    if (I.p < 0 || I.id < 0) continue;
+    for (const r of rows) {
+      if (r.length < h.length / 2 || !r[I.p]) continue;
+      acc.add("f" + r[I.id], r[I.d], r[I.nat], r[I.v], [r[I.p]], [I.t >= 0 ? r[I.t] : ""], I.sb >= 0 ? r[I.sb] : 0);
+    }
+  }
+  if (!files) throw new Error("aucun fichier trouvé");
+}
+function salesOf(f, DV, yFrom, yTo) {
+  const id = String(f.properties.idu || "");
+  return [...(DV.byParcel.get(id) || [])].filter(m => { const y = parseInt(String(m.date).slice(0, 4), 10); return y >= yFrom && y <= yTo; }).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+
+/* ---------- planning constraints (GPU prescriptions, SUP) and Géorisques ---------- */
+async function fetchGpuLayer(url, bb) {
+  const geom = JSON.stringify(turf.bboxPolygon(bb).geometry), out = [], seen = new Set();
+  for (let p = 0; p < 10; p++) {
+    const fc = await fetchJSON(`${url}?${new URLSearchParams({ geom, _start: p * 500, _limit: 500 })}`);
+    const f = (fc && fc.features) || []; let added = 0;
+    for (const z of f) { const pr = z.properties || {}, k = z.id || pr.gid || JSON.stringify(pr).slice(0, 200) + JSON.stringify(z.geometry && z.geometry.coordinates).slice(0, 80); if (!seen.has(k)) { seen.add(k); out.push(z); added++; } }
+    if (f.length < 500 || !added) break;
+  }
+  return out.filter(z => z.geometry && /Polygon/.test(z.geometry.type));
+}
+function pscKind(p) {
+  const t = String(p.typepsc || "").padStart(2, "0"), l = norm(`${p.libelle || ""} ${p.txt || ""} ${p.libelong || ""}`);
+  if (t === "01" || /espaces? boises? classes?/.test(l)) return ["EBC", "Espace boisé classé"];
+  if (t === "05" || /emplacements? reserves?/.test(l)) return ["ER", "Emplacement réservé"];
+  if (/inond|risque|ppr/.test(l)) return ["RISK", "Secteur de risque (PLU)"];
+  return null;
+}
+function supKind(p) {
+  const t = String(p.suptype || p.typesup || p.nomsuplitt || p.idsup || "").toLowerCase();
+  if (/^pm[123]/.test(t) || /^pm[123]/.test(String(p.categorie || "").toLowerCase())) return ["PPR", "Plan de prévention des risques"];
+  if (/^ac[124]/.test(t) || /^ac[124]/.test(String(p.categorie || "").toLowerCase())) return ["MH", "Monument historique / site protégé"];
+  return null;
+}
+function indexConstraints(pscRes, supRes) {
+  const g = new Grid(0.01);
+  for (const [res, fn] of [[pscRes, pscKind], [supRes, supKind]]) {
+    if (!Array.isArray(res)) continue;
+    for (const z of res) { const p = z.properties || {}, k = fn(p); if (k) g.add(turf.bbox(z), { kind: k[0], label: k[1], detail: [p.libelle, p.txt, p.suptype, p.nomsuplitt].filter(Boolean).join(" · "), geom: z }); }
+  }
+  return g;
+}
+function constraintsOf(f, CX) {
+  const out = [], seen = new Set();
+  for (const c of CX.query(turf.bbox(f))) {
+    if (seen.has(c.kind)) continue;
+    try {
+      if (!turf.booleanIntersects(f, c.geom)) continue;
+      // a shared boundary is not an overlap: require at least 10 m² in common
+      let a = null; try { const x = turf.intersect(f, c.geom); a = x ? turf.area(x) : 0; } catch {}
+      if (a === null || a >= 10) { out.push(c); seen.add(c.kind); }
+    } catch {}
+  }
+  return out;
+}
+async function georisquesAt(pt) {
+  const j = await fetchJSON(`${API.georisques}?${new URLSearchParams({ latlon: `${pt[0]},${pt[1]}` })}`, {}, 25000);
+  const rn = (j && (j.risquesNaturels || j.risques_naturels)) || null;
+  if (!rn || typeof rn !== "object") return { flood: null, list: [] };
+  const present = Object.entries(rn).filter(([, v]) => v && (v.present === true || v.present === "true"));
+  const list = present.map(([k, v]) => v.libelle || k);
+  const fl = Object.entries(rn).find(([k]) => /inond/i.test(k));
+  return { flood: fl ? !!(fl[1] && (fl[1].present === true || fl[1].present === "true")) : null, list };
+}
+
+/* ---------- PLU zoning (Géoportail de l'Urbanisme via API Carto) ---------- */
+async function fetchZones(bb) {
+  const geom = JSON.stringify(turf.bboxPolygon(bb).geometry), out = [], seen = new Set();
+  for (let p = 0; p < 10; p++) {
+    const fc = await fetchJSON(`${API.gpu}?${new URLSearchParams({ geom, _start: p * 500, _limit: 500 })}`);
+    const f = (fc && fc.features) || []; let added = 0;
+    for (const z of f) {
+      const pr = z.properties || {}, k = z.id || pr.gid || pr.idzone || (pr.idurba || "") + (pr.libelle || "") + JSON.stringify(z.geometry && z.geometry.coordinates).slice(0, 120);
+      if (!seen.has(k)) { seen.add(k); out.push(z); added++; }
+    }
+    if (f.length < 500 || !added) break;
+  }
+  return out.filter(z => z.geometry && /Polygon/.test(z.geometry.type));
+}
+function pluFamily(p) {
+  const t = String(p.typezone || "").toUpperCase(), l = String(p.libelle || "").toUpperCase();
+  if (t.startsWith("AU")) return "AU";
+  if (t === "ZNC") return "ZNC";
+  if (t.startsWith("ZC")) return "ZC";
+  if (t.startsWith("U")) return "U";
+  if (t.startsWith("A")) return "A";
+  if (t.startsWith("N")) return "N";
+  if (/^\d?AU/.test(l)) return "AU"; if (/^U/.test(l)) return "U"; if (/^A/.test(l)) return "A"; if (/^N/.test(l)) return "N";
+  return "?";
+}
+function indexZones(zones) {
+  const g = new Grid(0.01);
+  for (const z of zones) g.add(turf.bbox(z), { p: z.properties || {}, geom: z, fam: pluFamily(z.properties || {}) });
+  return g;
+}
+function zoneAt(G, pt) {
+  if (!G) return null;
+  for (const z of G.query([pt[0], pt[1], pt[0], pt[1]])) { try { if (turf.booleanPointInPolygon(pt, z.geom)) return z; } catch {} }
+  return null;
+}
+const HOUSE_WORDS = /habitat|habitation|residenti|pavillon|logement|centre|bourg|village|hameau|mixte/;
+function auSub(z) {
+  const t = String(z.p.typezone || "").toUpperCase(), l = String(z.p.libelle || "").toUpperCase();
+  if (t === "AUC" || /^1AU/.test(l)) return "c";
+  if (t === "AUS" || /^2AU/.test(l)) return "s";
+  return ""; // not stated: matches both 1AU and 2AU boxes
+}
+function pluMatch(z, sel, codes) {
+  if (!z) return false;
+  const fam = z.fam, code = String(z.p.libelle || "").toUpperCase().replace(/\s/g, ""), sub = fam === "AU" ? auSub(z) : "";
+  if (codes.some(c => code === c || code.startsWith(c))) return true;
+  return sel.some(v =>
+    v === "house" ? fam === "ZC" || (fam === "U" && (z.p.libelong ? HOUSE_WORDS.test(norm(z.p.libelong)) : /^U[A-D]/.test(code))) :
+    v === "U" ? fam === "U" || fam === "ZC" :
+    v === "AUc" ? fam === "AU" && sub !== "s" :
+    v === "AUs" ? fam === "AU" && sub !== "c" :
+    v === "A" ? fam === "A" || fam === "ZNC" :
+    v === "N" ? fam === "N" || fam === "ZNC" : false);
+}
+const PLU_COL = { U: "#d6453d", ZC: "#d6453d", AU: "#e8892b", A: "#d9c330", N: "#3f9a4a", ZNC: "#9a9a9a", "?": "#8a8a8a" };
+function drawZones(zones, show) {
+  pluLayer.clearLayers();
+  for (const z of zones) {
+    const fam = pluFamily(z.properties || {}), pr = z.properties || {};
+    L.geoJSON(z, { style: { color: PLU_COL[fam], weight: 1.5, fillOpacity: .12, dashArray: "3 3" } })
+      .bindTooltip(`${esc(pr.libelle || fam)}${pr.libelong ? " · " + esc(pr.libelong) : ""}`, { sticky: true }).addTo(pluLayer);
+  }
+  if (show) pluLayer.addTo(map);
+}
+
+/* ---------- results ---------- */
+function links(r) {
+  const [x, y] = r.c.map(v => v.toFixed(6));
+  return { gp: `https://www.geoportail.gouv.fr/carte?c=${x},${y}&z=18&l0=ORTHOIMAGERY.ORTHOPHOTOS::GEOPORTAIL:OGC:WMTS(1)&l1=CADASTRALPARCELS.PARCELLAIRE_EXPRESS::GEOPORTAIL:OGC:WMTS(1)&permalink=yes`,
+           gm: `https://www.google.com/maps/@?api=1&map_action=map&center=${y},${x}&zoom=18&basemap=satellite`,
+           gu: `https://www.geoportail-urbanisme.gouv.fr/map/#tile=1&lon=${x}&lat=${y}&zoom=18`,
+           gr: "https://www.georisques.gouv.fr/mes-risques/connaitre-les-risques-pres-de-chez-moi",
+           ann: "https://www.google.com/search?q=" + encodeURIComponent(`"${communeNameOf(r)}" maison à vendre (site:leboncoin.fr OR site:seloger.com OR site:bienici.com OR site:immobilier.notaires.fr)`) };
+}
+const polys = [];
+function render(list) {
+  candLayer.eachLayer(l => { if (l._cand) candLayer.removeLayer(l); }); polys.length = 0;
+  const acc = css("--accent");
+  $("results").innerHTML = list.slice(0, 300).map((r, i) => {
+    const l = links(r), sec = r.section ? `Section ${esc(r.section)} n° ${esc(r.numero)}` : esc(r.ref);
+    return `<li data-i="${i}" tabindex="0"><span class="rank">${i + 1}</span><span class="ref">${sec}</span><span class="score">${Math.round(r.score * 100)}%</span>
+      <span class="meta">${esc(r.ref)} · ${Math.round(r.area).toLocaleString("fr-FR")} m² (${ha(r.area)} ha)</span>
+      <span class="chips">${r.chips.map(c => `<span class="chip ${c.cls || ""} ${c.s == null ? "" : c.s >= .8 ? "ok" : c.s >= .4 ? "part" : "no"}" title="${esc(c.title || "")}">${esc(c.label)}</span>`).join("")}</span>
+      <span class="links"><a href="${l.gp}" target="_blank" rel="noopener">Géoportail</a><a href="${l.gm}" target="_blank" rel="noopener">Google Satellite</a><a href="${l.gu}" target="_blank" rel="noopener">Urbanisme</a><a href="${l.gr}" target="_blank" rel="noopener">Géorisques</a><a href="${l.ann}" target="_blank" rel="noopener" title="Recherche d'annonces dans la commune : une annonce ne donne pas le numéro de parcelle, comparez avec la photo aérienne">Annonces</a>${r.plu && /^https?:/.test(r.plu.p.urlfic || "") ? `<a href="${esc(r.plu.p.urlfic)}" target="_blank" rel="noopener">Règlement</a>` : ""}</span></li>`;
+  }).join("");
+  list.forEach((r, i) => {
+    const p = L.geoJSON(r.f, { style: { color: acc, weight: i < 10 ? 2.5 : 1.5, fillOpacity: i < 10 ? .18 : .06 } });
+    p._cand = true; p.on("click", () => select(i)); p.addTo(candLayer); polys.push(p);
+    if (i < 20) { const m = L.marker([r.c[1], r.c[0]], { icon: L.divIcon({ className: "", html: `<span class="pin">${i + 1}</span>`, iconSize: null }) }); m._cand = true; m.on("click", () => select(i)); m.addTo(candLayer); }
+  });
+}
+function select(i) {
+  document.querySelectorAll("#results li").forEach(li => li.classList.toggle("sel", +li.dataset.i === i));
+  const r = S.results[i]; if (!r) return;
+  polys.forEach((p, j) => p.setStyle({ weight: j === i ? 4 : j < 10 ? 2.5 : 1.5 }));
+  map.fitBounds(polys[i].getBounds(), { maxZoom: 18, padding: [40, 40] });
+  if (!map.hasLayer(ortho)) { map.removeLayer(plan); ortho.addTo(map); }
+  const li = document.querySelector(`#results li[data-i="${i}"]`); li && li.scrollIntoView({ block: "nearest" });
+}
+$("results").addEventListener("click", e => { if (e.target.closest("a")) return; const li = e.target.closest("li"); if (li) select(+li.dataset.i); });
+$("results").addEventListener("keydown", e => { if (e.key === "Enter") { const li = e.target.closest("li"); if (li) select(+li.dataset.i); } });
+
+function exportCSV() {
+  const rows = [["rang","idu","commune","section","numero","surface_m2","score_pct","plu_zone","plu_libelle","plu_type","nb_batiments","nb_habitables","annees","source_batiments","ventes_dvf","contraintes","risques_georisques","lon","lat","verifications","geoportail","urbanisme"]];
+  S.results.forEach((r, i) => rows.push([i + 1, r.ref, S.communeName, r.section || "", r.numero || "", Math.round(r.area), Math.round(r.score * 100), r.plu ? r.plu.p.libelle || "" : "", r.plu ? r.plu.p.libelong || "" : "", r.plu ? r.plu.p.typezone || "" : "", r.bld ? r.bld.n : "", r.bld ? r.bld.hab : "", r.bld ? r.bld.years.join(" ") : "", r.bld ? r.bld.src : "", r.sales ? r.sales.map(m => `${m.date} ${Math.round(m.price || 0)} EUR${m.parcels.size > 1 ? " (" + m.parcels.size + " parcelles)" : ""}`).join(" | ") : "", (r.cx || []).map(c => c.label).join(" | "), r.risk ? r.risk.list.join(" | ") || "aucun" : "", r.c[0].toFixed(6), r.c[1].toFixed(6), r.chips.map(c => c.label).join("; "), links(r).gp, links(r).gu]));
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv" }));
+  a.download = `mouton-6-pattes-${(S.communeName || "79").replace(/\W+/g, "-")}-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+/* ---------- wiring ---------- */
+$("parse").onclick = parseDescription;
+$("search").onclick = search;
+$("csv").onclick = exportCSV;
+document.querySelectorAll("[data-ex]").forEach(b => b.onclick = () => { $("desc").value = b.dataset.ex; parseDescription(); });
+/* drawn search zone: click vertices, then "Terminer la zone" */
+let drawPts = [];
+function showZone(pts, closed) {
+  zoneLayer.clearLayers(); if (!pts.length) return;
+  const ll = pts.map(p => [p[1], p[0]]), col = css("--accent");
+  (closed ? L.polygon(ll, { color: col, weight: 2, fillColor: "#f2c230", fillOpacity: .22 }) : L.polyline(ll, { color: col, weight: 2, dashArray: "4 4" })).addTo(zoneLayer);
+  if (!closed) pts.forEach(p => L.circleMarker([p[1], p[0]], { radius: 4, color: col, fillOpacity: 1 }).addTo(zoneLayer));
+}
+function setZone(pts, quiet) {
+  S.zone = turf.polygon([[...pts, pts[0]]]); showZone(pts, true); $("areaMode").value = "zone";
+  const km2 = turf.area(S.zone) / 1e6;
+  if (!quiet) status(`Zone de ${km2.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} km² enregistrée.` + (km2 > 60 ? " Zone large : la recherche peut être longue, voire atteindre la limite de 40 000 parcelles." : " Lancez la recherche."));
+}
+$("draw").onclick = () => {
+  if (!S.drawing) {
+    S.drawing = true; S.picking = false; drawPts = []; S.zone = null; showZone([]);
+    $("draw").textContent = "Terminer la zone"; map.getContainer().style.cursor = "crosshair"; map.doubleClickZoom.disable();
+    return status("Cliquez sur la carte pour placer les coins de la zone. Double-cliquez, ou cliquez sur Terminer la zone, pour la fermer.");
+  }
+  finishDraw();
+};
+function finishDraw() {
+  S.drawing = false; $("draw").textContent = "Dessiner la zone"; map.getContainer().style.cursor = ""; map.doubleClickZoom.enable();
+  if (drawPts.length < 3) { showZone([]); status("Il faut au moins 3 points pour former une zone.", true); return false; }
+  setZone(drawPts); store("zone", JSON.stringify(drawPts)); return true;
+}
+map.on("dblclick", () => { if (S.drawing) finishDraw(); });
+$("pick").onclick = () => { S.picking = true; status("Cliquez sur la carte pour placer le centre du cercle de recherche."); map.getContainer().style.cursor = "crosshair"; };
+map.on("click", e => {
+  if (S.drawing) {
+    const last = drawPts[drawPts.length - 1];
+    if (last && map.latLngToContainerPoint(L.latLng(last[1], last[0])).distanceTo(e.containerPoint) < 6) return; // second click of a double-click
+    drawPts.push([e.latlng.lng, e.latlng.lat]); showZone(drawPts, false); status(`${drawPts.length} point${drawPts.length > 1 ? "s" : ""} placé${drawPts.length > 1 ? "s" : ""}. Cliquez sur Terminer la zone quand c'est fini.`); return; }
+  if (!S.picking) return;
+  S.picking = false; map.getContainer().style.cursor = ""; S.point = e.latlng; S.pointAuto = false; $("areaMode").value = "circle";
+  pointLayer.clearLayers(); L.circleMarker(e.latlng, { radius: 6, color: css("--accent"), fillOpacity: 1 }).addTo(pointLayer);
+  status(`Point placé à ${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}. Zone de recherche : cercle de ${$("radius").value} km.`);
+});
+const saved = recall("desc"); if (saved) $("desc").value = saved;
+try { const z = JSON.parse(recall("zone") || "null"); if (Array.isArray(z) && z.length >= 3) { setZone(z, true); const b = turf.bbox(S.zone); map.fitBounds([[b[1], b[0]], [b[3], b[2]]]); } } catch {}
+loadCommunes();
+</script>
+</body>
+</html>
