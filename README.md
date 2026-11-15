@@ -9,6 +9,7 @@ Recherche de parcelles et de biens en Deux-Sèvres à partir d'une description :
 - Lit une description (« au moins 2 bâtiments habitables avec dépendances à rénover, sur 2 500 m² minimum… ») et remplit les critères.
 - Cherche dans une commune, un cercle ou une zone dessinée sur la carte, parmi **toutes** les parcelles cadastrales, vendues ou non.
 - Filtres : surface (m²), eau, bois, haies, accès, forme, pente, nombre de bâtiments et bâtiments habitables, année de construction, zonage PLU (U, 1AU, 2AU, A, N, codes précis), ventes passées, zones inondables, PPR, espaces boisés classés, emplacements réservés, abords de monuments historiques.
+- Biens en vente : collez une annonce, l'application retrouve la parcelle et la marque « en vente » (annonces gardées dans le navigateur).
 - Résultats sur photo aérienne, liens Géoportail, Google Satellite, Géoportail de l'Urbanisme, Géorisques et recherche d'annonces, export CSV.
 
 ## Données (publiques, sans clé)
